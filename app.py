@@ -301,7 +301,41 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
         search = st.text_input("Search player", key="adp_search", placeholder="e.g. Mahomes")
 
     # ── Build display dataframe ────────────────────────────────────────────────
-    df = adp_cur.copy()
+    # Compute positional ranks on the FULL dataset before any filtering so
+    # ranks are always relative to the whole position pool.
+    full_df = adp_cur.copy()
+
+    full_df["adp_pos_rank"] = (
+        full_df.groupby("position")["adp"]
+        .rank(ascending=True, method="min")
+        .astype(int)
+    )
+
+    if "model_pos_rank_str" in full_df.columns:
+        full_df["model_pos_rank_num"] = (
+            full_df["model_pos_rank_str"].str.extract(r"(\d+)")[0].astype(float)
+        )
+    else:
+        full_df["model_pos_rank_num"] = np.nan
+
+    # Positional value score: positive = model likes them more than market does
+    full_df["pos_value_score"] = (
+        full_df["adp_pos_rank"] - full_df["model_pos_rank_num"]
+    ).round(0)
+
+    # Pos Rank display: "WR8 · ADP WR15"
+    def _pos_rank_display(row):
+        pos  = row["position"]
+        mstr = row.get("model_pos_rank_str", "")
+        apr  = row.get("adp_pos_rank")
+        if not mstr or pd.isna(mstr) or pd.isna(apr):
+            return mstr if (mstr and not pd.isna(mstr)) else "—"
+        return f"{mstr} · ADP {pos}{int(apr)}"
+
+    full_df["pos_rank_display"] = full_df.apply(_pos_rank_display, axis=1)
+
+    # Filter for display
+    df = full_df.copy()
     if pos_sel:
         df = df[df["position"].isin(pos_sel)]
     if search:
@@ -333,8 +367,8 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     sort_map = {
         "Best Ball ADP (Underdog)": ("adp", True),
         "Model Rank":               ("model_overall_rank", True),
-        "Value Score ↑":            ("value_score", False),
-        "Value Score ↓":            ("value_score", True),
+        "Value Score ↑":            ("pos_value_score", False),
+        "Value Score ↓":            ("pos_value_score", True),
     }
     scol, sasc = sort_map.get(sort_by, ("adp", True))
     if scol in df.columns:
@@ -342,17 +376,17 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
 
     # Columns to display
     col_map = {
-        "Player":             "Player",
-        "position":           "Pos",
-        "team":               "Team",
-        "adp":                "Best Ball ADP (Underdog)",
-        "model_overall_rank": "Model Rank",
-        "model_pos_rank_str": "Pos Rank",
-        "fpts_ppr":           "Proj PPR",
-        "value_score":        "Value Score",
-        "Tier1%":             "Tier1%",
-        "Top25%":             "Top25%",
-        "20pts%":             "20pts%",
+        "Player":            "Player",
+        "position":          "Pos",
+        "team":              "Team",
+        "adp":               "Best Ball ADP (Underdog)",
+        "model_overall_rank":"Model Rank",
+        "pos_rank_display":  "Pos Rank",
+        "fpts_ppr":          "Proj PPR",
+        "pos_value_score":   "Value Score",
+        "Tier1%":            "Tier1%",
+        "Top25%":            "Top25%",
+        "20pts%":            "20pts%",
     }
     avail = [c for c in col_map if c in df.columns or c == "Player"]
     table = df[[c for c in avail if c in df.columns]].rename(columns=col_map)
@@ -360,7 +394,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     def _vs_color(val):
         if pd.isna(val):
             return ""
-        a = min(abs(val) / 100, 1.0)   # 0→0.0, 100→1.0
+        a = min(abs(val) / 30, 1.0)   # ±30 positional spots = max opacity
         opacity = round(0.06 + a * 0.14, 3)  # 0.06 – 0.20
         if val > 0:
             return f"background-color:rgba(0,180,80,{opacity})"
@@ -405,49 +439,63 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
     st.caption(
         f"Best Ball ADP = Underdog March 4 draft position (lower is better)  ·  "
-        f"Value Score = ADP − Model Rank (positive = undervalued by market)  ·  "
+        f"Value Score = positional ADP rank − model positional rank (positive = undervalued at position)  ·  "
         f"Tier metrics = 12-team PPR, most recent season  ·  "
         f"Snapshot: {snapshot_date}"
     )
 
     # ── Market Inefficiencies ──────────────────────────────────────────────────
-    if "value_score" in df.columns and "model_overall_rank" in df.columns:
+    if "pos_value_score" in full_df.columns and "model_pos_rank_num" in full_df.columns:
         st.divider()
         st.subheader("Market Inefficiencies")
-        ranked = df[
-            df["model_overall_rank"].notna() &
-            df["value_score"].notna() &
-            (df["adp"] <= 300)
+
+        ranked = full_df[
+            full_df["model_pos_rank_num"].notna() &
+            full_df["pos_value_score"].notna() &
+            (full_df["adp"] <= 300)
         ].copy()
+        ranked["Player"] = ranked["player_name"]
+
+        def _pos_label(row):
+            pos  = row["position"]
+            mnum = row.get("model_pos_rank_num")
+            apr  = row.get("adp_pos_rank")
+            pvs  = row.get("pos_value_score")
+            if pd.isna(mnum) or pd.isna(apr) or pd.isna(pvs):
+                return "—"
+            sign = f"+{int(pvs)}" if pvs > 0 else str(int(pvs))
+            return f"Model: {pos}{int(mnum)}, ADP: {pos}{int(apr)} ({sign})"
+
+        ranked["Positional Gap"] = ranked.apply(_pos_label, axis=1)
 
         mc1, mc2 = st.columns(2)
         with mc1:
             st.markdown("**🟢 Best Values** — model ranks higher than market")
             vals = (
-                ranked[ranked["value_score"] > 0]
-                .sort_values("value_score", ascending=False)
-                .head(8)[["Player", "position", "adp", "model_overall_rank", "value_score"]]
+                ranked[ranked["pos_value_score"] > 0]
+                .sort_values("pos_value_score", ascending=False)
+                .head(8)[["Player", "position", "adp", "Positional Gap", "pos_value_score"]]
             )
-            vals.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
+            vals.columns = ["Player", "Pos", "UD ADP", "Positional Gap", "Value"]
             st.dataframe(
                 vals.style
                 .applymap(lambda v: _vs_color(v), subset=["Value"])
-                .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "+{:.0f}"}),
+                .format({"UD ADP": "{:.1f}", "Value": "+{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
 
         with mc2:
             st.markdown("**🔴 Overvalued** — market ranks higher than model")
             over = (
-                ranked[ranked["value_score"] < 0]
-                .sort_values("value_score")
-                .head(8)[["Player", "position", "adp", "model_overall_rank", "value_score"]]
+                ranked[ranked["pos_value_score"] < 0]
+                .sort_values("pos_value_score")
+                .head(8)[["Player", "position", "adp", "Positional Gap", "pos_value_score"]]
             )
-            over.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
+            over.columns = ["Player", "Pos", "UD ADP", "Positional Gap", "Value"]
             st.dataframe(
                 over.style
                 .applymap(lambda v: _vs_color(v), subset=["Value"])
-                .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "{:.0f}"}),
+                .format({"UD ADP": "{:.1f}", "Value": "{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
 

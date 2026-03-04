@@ -402,6 +402,130 @@ for _, player in latest.iterrows():
         })
         all_projections.append(proj)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# INJURED RETURNER HANDLER
+# Players healthy the season before last but who missed most of the most recent
+# season.  Re-base their volume on the prior healthy year + 15% rust discount.
+# ─────────────────────────────────────────────────────────────────────────────
+PRIOR_SEASON    = BASE_SEASON - 1
+VOLUME_DISCOUNT = 0.85   # 15% haircut: rust + injury-recurrence risk
+
+_prior_healthy = seasonal[
+    (seasonal["season"] == PRIOR_SEASON) &
+    (seasonal["games"].fillna(0)              >= 12) &
+    (seasonal["fantasy_points_ppr"].fillna(0) >= 150)
+][["player_id"]]
+
+_recent_injured = seasonal[
+    (seasonal["season"] == BASE_SEASON) &
+    (seasonal["games"].fillna(0) < 8)
+][["player_id"]]
+
+returner_ids = set(_prior_healthy.merge(_recent_injured, on="player_id")["player_id"])
+
+# ── Print flagged players ────────────────────────────────────────────────────
+print(f"\n{'─' * 60}")
+print(f"  Injured Returner Handler")
+print(f"{'─' * 60}")
+print(f"  Criteria: {PRIOR_SEASON} (>=12 g, >=150 fpts_ppr)  ->  {BASE_SEASON} (<8 g)")
+
+flagged_info = []
+for _pid in sorted(returner_ids):
+    _pr = seasonal[(seasonal["player_id"] == _pid) & (seasonal["season"] == PRIOR_SEASON)]
+    _ir = seasonal[(seasonal["player_id"] == _pid) & (seasonal["season"] == BASE_SEASON)]
+    if _pr.empty:
+        continue
+    flagged_info.append((
+        _pr["player_name"].values[0],
+        _pr["position"].values[0],
+        int(_pr["games"].values[0]),
+        float(_pr["fantasy_points_ppr"].values[0]),
+        int(_ir["games"].values[0]) if not _ir.empty else 0,
+    ))
+
+if flagged_info:
+    print(f"\n  {'Player':<26} {'Pos':<5} {PRIOR_SEASON}              {BASE_SEASON}")
+    print(f"  {'-'*26} {'-'*4} {'g':>3}  {'fpts_ppr':>9}   {'g':>3}")
+    for _name, _pos, _pg, _pp, _ig in sorted(flagged_info):
+        print(f"  {_name:<26} {_pos:<5} {_pg:>3}  {_pp:>9.1f}   {_ig:>3}")
+else:
+    print("\n  No players matched the injury criteria.")
+
+# ── Rebuild projections for returners ───────────────────────────────────────
+rebuilt = []
+for proj in all_projections:
+    pid = proj["player_id"]
+    if pid not in returner_ids:
+        proj["returning_from_injury"] = False
+        rebuilt.append(proj)
+        continue
+
+    pos      = proj["position"]
+    scenario = proj["scenario"]
+    pct_col  = {"bear": "p25", "base": "median", "bull": "p75"}[scenario]
+    age_mult = float(proj["age_multiplier"])
+
+    def prior_pct(metric, _pid=pid, _pc=pct_col):
+        """Pull variance percentile from the prior healthy season."""
+        row = variance[
+            (variance["player_id"] == _pid) &
+            (variance["metric"]    == metric) &
+            (variance["season"]    == PRIOR_SEASON)
+        ]
+        return np.nan if row.empty else float(row[_pc].values[0])
+
+    def rescale(existing_total, prior_pg_raw):
+        """Ratio to shift existing season total onto prior-year base × discount.
+        prior_pg_raw is the raw (pre-age-curve) per-game value from variance.
+        existing_total already includes the age curve, so we apply age_mult again
+        to the prior figure to keep adjustments consistent.
+        """
+        if existing_total <= 0:
+            return VOLUME_DISCOUNT
+        if np.isnan(prior_pg_raw):
+            return VOLUME_DISCOUNT
+        return (prior_pg_raw * age_mult * VOLUME_DISCOUNT * GAMES) / existing_total
+
+    if pos in ("WR", "TE"):
+        r = rescale(proj["targets"], prior_pct("targets"))
+        proj["targets"]         = safe_round(proj["targets"]         * r)
+        proj["receptions"]      = safe_round(proj["receptions"]      * r)
+        proj["receiving_yards"] = safe_round(proj["receiving_yards"] * r)
+        proj["receiving_tds"]   = safe_round(proj["receiving_tds"]   * r, 1)
+
+    elif pos == "RB":
+        cr = rescale(proj["carries"], prior_pct("carries"))
+        proj["carries"]       = safe_round(proj["carries"]       * cr)
+        proj["rushing_yards"] = safe_round(proj["rushing_yards"] * cr)
+        proj["rushing_tds"]   = safe_round(proj["rushing_tds"]   * cr, 1)
+
+        tr = rescale(proj["targets"], prior_pct("targets"))
+        proj["targets"]         = safe_round(proj["targets"]         * tr)
+        proj["receptions"]      = safe_round(proj["receptions"]      * tr)
+        proj["receiving_yards"] = safe_round(proj["receiving_yards"] * tr)
+        proj["receiving_tds"]   = safe_round(proj["receiving_tds"]   * tr, 1)
+
+    elif pos == "QB":
+        ar = rescale(proj.get("attempts", 0), prior_pct("attempts"))
+        for _k in ["attempts", "completions", "passing_yards"]:
+            if _k in proj:
+                proj[_k] = safe_round(proj[_k] * ar)
+        for _k in ["passing_tds", "interceptions"]:
+            if _k in proj:
+                proj[_k] = safe_round(proj[_k] * ar, 1)
+
+    # Recalculate fantasy points with adjusted volume
+    for fmt_name in SCORING:
+        proj[f"fpts_{fmt_name}"] = calc_fpts(proj, fmt_name, pos)
+
+    proj["projection_confidence"] = "Medium"
+    proj["returning_from_injury"] = True
+    rebuilt.append(proj)
+
+all_projections = rebuilt
+n_returners = len({p["player_id"] for p in all_projections if p.get("returning_from_injury")})
+print(f"\n  {n_returners} players rebuilt as injured returners")
+
 proj_df = pd.DataFrame(all_projections)
 proj_df.to_csv(DATA / "projections_weighted.csv", index=False)
 
