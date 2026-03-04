@@ -277,7 +277,7 @@ def compute_projection(player_id, seasonal, variance, team_stats,
 
 # ── ADP Tab ───────────────────────────────────────────────────────────────────
 
-def _adp_tab(adp_cur, adp_hist, adp_trends):
+def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     if adp_cur.empty:
         st.info("No ADP data yet — run `py 05_adp_pull.py` to generate it.")
         return
@@ -321,6 +321,27 @@ def _adp_tab(adp_cur, adp_hist, adp_trends):
         lambda r: f"{r['player_name']} {r['trend']}".strip(), axis=1
     )
 
+    # ── Merge tier consistency columns (12-team PPR, most recent season) ──────
+    if not tiers_df.empty:
+        tier_ppr12 = (
+            tiers_df[
+                (tiers_df["scoring_format"] == "ppr") &
+                (tiers_df["league_size"] == 12)
+            ]
+            .sort_values("season")
+            .groupby("player_name", as_index=False)
+            .last()
+        )
+        df = df.merge(
+            tier_ppr12[["player_name", "boom_tier1_pct", "boom_top25_pct", "boom_20pts_pct"]],
+            on="player_name", how="left",
+        )
+        df.rename(columns={
+            "boom_tier1_pct": "Tier1%",
+            "boom_top25_pct": "Top25%",
+            "boom_20pts_pct": "20pts%",
+        }, inplace=True)
+
     sort_map = {
         "ADP":             ("adp", True),
         "Model Rank":      ("model_overall_rank", True),
@@ -341,6 +362,9 @@ def _adp_tab(adp_cur, adp_hist, adp_trends):
         "model_pos_rank_str": "Pos Rank",
         "fpts_ppr":           "Proj PPR",
         "value_score":        "Value Score",
+        "Tier1%":             "Tier1%",
+        "Top25%":             "Top25%",
+        "20pts%":             "20pts%",
     }
     avail = [c for c in col_map if c in df.columns or c == "Player"]
     table = df[[c for c in avail if c in df.columns]].rename(columns=col_map)
@@ -358,21 +382,41 @@ def _adp_tab(adp_cur, adp_hist, adp_trends):
             return "background-color:#f7d6d6;color:#8b1c1c"
         return ""
 
+    def _tier_pct_color(val):
+        if pd.isna(val):
+            return ""
+        if val >= 60:
+            return "background-color:#b7f5b0;color:#0f4d0a"
+        if val >= 40:
+            return "background-color:#d9f7d6;color:#1e6b18"
+        if val >= 20:
+            return "background-color:#fef9e7"
+        if val < 10:
+            return "background-color:#f7d6d6;color:#8b1c1c"
+        return ""
+
     fmt = {}
     if "ADP"         in table.columns: fmt["ADP"]         = lambda v: f"{int(v)}" if pd.notna(v) else "—"
     if "Model Rank"  in table.columns: fmt["Model Rank"]  = lambda v: f"{int(v)}" if pd.notna(v) else "—"
     if "Proj PPR"    in table.columns: fmt["Proj PPR"]    = lambda v: f"{v:.1f}"  if pd.notna(v) else "—"
     if "Value Score" in table.columns: fmt["Value Score"] = lambda v: f"{v:+.0f}" if pd.notna(v) else "—"
+    if "Tier1%"      in table.columns: fmt["Tier1%"]      = lambda v: f"{v:.1f}%" if pd.notna(v) else "—"
+    if "Top25%"      in table.columns: fmt["Top25%"]      = lambda v: f"{v:.1f}%" if pd.notna(v) else "—"
+    if "20pts%"      in table.columns: fmt["20pts%"]      = lambda v: f"{v:.1f}%" if pd.notna(v) else "—"
 
     styler = table.style.format(fmt, na_rep="—")
     if "Value Score" in table.columns:
         styler = styler.applymap(_vs_color, subset=["Value Score"])
+    for tier_col in ["Tier1%", "Top25%", "20pts%"]:
+        if tier_col in table.columns:
+            styler = styler.applymap(_tier_pct_color, subset=[tier_col])
 
     st.subheader(f"Current Rankings — {len(df)} players shown")
     st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
     st.caption(
         f"ADP = Sleeper `search_rank` (lower is better)  ·  "
         f"Value Score = ADP − Model Rank (positive = undervalued by market)  ·  "
+        f"Tier metrics = 12-team PPR, most recent season  ·  "
         f"Snapshot: {snapshot_date}"
     )
 
@@ -448,7 +492,125 @@ def _adp_tab(adp_cur, adp_hist, adp_trends):
 
 # ── Projection Tab ─────────────────────────────────────────────────────────────
 
-def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring):
+def _projection_tier_section(pid, pos, tiers_df):
+    """Historical tier consistency section appended to the projection card."""
+    if tiers_df.empty:
+        st.info("Run `py 06_tier_consistency.py` to generate tier data.")
+        return
+
+    st.divider()
+    st.subheader("Historical Tier Consistency")
+
+    # Controls
+    tc1, tc2, tc3 = st.columns([2, 2, 3])
+    with tc1:
+        tier_fmt = st.selectbox(
+            "Scoring", list(TIER_SCORING_MAP.keys()),
+            index=0, key="proj_tier_fmt",
+        )
+    with tc2:
+        tier_league = st.selectbox(
+            "League Size", [10, 12, 14, 16],
+            index=1, key="proj_tier_league",
+        )
+    with tc3:
+        stat_range = st.radio(
+            "Stat cards show",
+            ["Most Recent", "Last 2 Yrs", "Last 3 Yrs"],
+            horizontal=True, key="proj_tier_range",
+        )
+
+    fmt_key      = TIER_SCORING_MAP[tier_fmt]
+    player_tiers = (
+        tiers_df[
+            (tiers_df["player_id"] == pid) &
+            (tiers_df["scoring_format"] == fmt_key) &
+            (tiers_df["league_size"] == tier_league)
+        ]
+        .sort_values("season")
+        .copy()
+    )
+
+    if player_tiers.empty:
+        st.info("No tier history available for this player.")
+        return
+
+    t1_col = f"{pos}1_weeks"
+    t2_col = f"{pos}2_weeks"
+    t3_col = f"{pos}3_weeks"
+    t4_col = f"{pos}4_weeks"
+
+    # ── Stacked bar chart — all available seasons ────────────────────────────
+    chart_rows = []
+    for _, r in player_tiers.iterrows():
+        szn = str(int(r["season"]))
+        chart_rows += [
+            {"Season": szn, "Tier": f"{pos}1",  "Weeks": int(r.get(t1_col, 0)), "ord": 1},
+            {"Season": szn, "Tier": f"{pos}2",  "Weeks": int(r.get(t2_col, 0)), "ord": 2},
+            {"Season": szn, "Tier": f"{pos}3",  "Weeks": int(r.get(t3_col, 0)), "ord": 3},
+            {"Season": szn, "Tier": f"{pos}4+", "Weeks": int(r.get(t4_col, 0)), "ord": 4},
+        ]
+    chart_df = pd.DataFrame(chart_rows)
+
+    tier_domain = [f"{pos}1", f"{pos}2", f"{pos}3", f"{pos}4+"]
+    tier_colors = ["#27ae60", "#2980b9", "#f39c12", "#c0392b"]
+
+    chart = (
+        alt.Chart(chart_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Season:O", title="Season"),
+            y=alt.Y("Weeks:Q", title="Weeks", stack="zero"),
+            color=alt.Color(
+                "Tier:N",
+                scale=alt.Scale(domain=tier_domain, range=tier_colors),
+                legend=alt.Legend(title="Tier", orient="right"),
+            ),
+            order=alt.Order("ord:Q", sort="ascending"),
+            tooltip=["Season:O", "Tier:N", "Weeks:Q"],
+        )
+        .properties(
+            height=220,
+            title=f"Tier weeks per season — {tier_fmt} · {tier_league}-team",
+        )
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    # ── Boom stat cards — controlled by the toggle ───────────────────────────
+    n_years   = {"Most Recent": 1, "Last 2 Yrs": 2, "Last 3 Yrs": 3}[stat_range]
+    stat_data = player_tiers.tail(n_years)
+
+    total_games  = int(stat_data["games"].sum())
+    t1_total     = int(stat_data[t1_col].sum()) if t1_col in stat_data.columns else 0
+    top25_total  = int(stat_data["boom_top25_weeks"].sum())
+    pts20_total  = int(stat_data["boom_20pts_weeks"].sum())
+
+    tier1_pct = round(t1_total   / total_games * 100, 1) if total_games else 0.0
+    top25_pct = round(top25_total / total_games * 100, 1) if total_games else 0.0
+    pts20_pct = round(pts20_total / total_games * 100, 1) if total_games else 0.0
+
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric(
+        f"{pos}1%",
+        f"{tier1_pct:.1f}%",
+        help=f"{pos}1 weeks ÷ games played",
+    )
+    sc2.metric(
+        "Top 25%",
+        f"{top25_pct:.1f}%",
+        help="Weeks finishing top 25% of position ÷ games played",
+    )
+    sc3.metric(
+        "20 pts%",
+        f"{pts20_pct:.1f}%",
+        help="Weeks scoring 20+ fantasy points ÷ games played",
+    )
+
+    seasons_shown = ", ".join(str(int(s)) for s in stat_data["season"].tolist())
+    st.caption(f"Stat cards: {seasons_shown}  ·  {total_games} games")
+
+
+def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df):
     # ── Resolve player ────────────────────────────────────────────────────────
     prow = idx[idx["player_name"] == selected]
     if prow.empty:
@@ -677,189 +839,8 @@ def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, s
             )
             st.altair_chart(spark, use_container_width=True)
 
-
-# ── Tier History Tab ──────────────────────────────────────────────────────────
-
-def _render_tier_player(pname, pos_data, pos, fmt_label, league_size, view_mode, seasons_to_show):
-    """Render stacked bar chart + boom metric cards for one player."""
-    player_data = pos_data[
-        (pos_data["player_name"] == pname) &
-        (pos_data["season"].isin(seasons_to_show))
-    ].sort_values("season")
-
-    if player_data.empty:
-        st.warning(f"No data for **{pname}** in the selected seasons.")
-        return
-
-    t1_col = f"{pos}1_weeks"
-    t2_col = f"{pos}2_weeks"
-    t3_col = f"{pos}3_weeks"
-    t4_col = f"{pos}4_weeks"
-
-    # ── Build chart data ─────────────────────────────────────────────────────
-    chart_rows = []
-    for _, r in player_data.iterrows():
-        szn = str(int(r["season"]))
-        chart_rows += [
-            {"Season": szn, "Tier": f"{pos}1",  "Weeks": int(r.get(t1_col, 0)), "ord": 1},
-            {"Season": szn, "Tier": f"{pos}2",  "Weeks": int(r.get(t2_col, 0)), "ord": 2},
-            {"Season": szn, "Tier": f"{pos}3",  "Weeks": int(r.get(t3_col, 0)), "ord": 3},
-            {"Season": szn, "Tier": f"{pos}4+", "Weeks": int(r.get(t4_col, 0)), "ord": 4},
-        ]
-    chart_df = pd.DataFrame(chart_rows)
-
-    # ── Aggregate boom metrics ────────────────────────────────────────────────
-    total_games  = int(player_data["games"].sum())
-    t1_total     = int(player_data[t1_col].sum()) if t1_col in player_data.columns else 0
-    top25_total  = int(player_data["boom_top25_weeks"].sum())
-    pts20_total  = int(player_data["boom_20pts_weeks"].sum())
-
-    tier1_pct = round(t1_total   / total_games * 100, 1) if total_games else 0.0
-    top25_pct = round(top25_total / total_games * 100, 1) if total_games else 0.0
-    pts20_pct = round(pts20_total / total_games * 100, 1) if total_games else 0.0
-
-    # ── Boom metric cards ────────────────────────────────────────────────────
-    mc1, mc2, mc3 = st.columns(3)
-    mc1.metric(
-        f"{pos}1%", f"{tier1_pct:.1f}%",
-        help=f"Weeks finishing as a {pos}1 ÷ games played",
-    )
-    mc2.metric(
-        "Top 25%", f"{top25_pct:.1f}%",
-        help="Weeks finishing in the top 25% of position ÷ games played",
-    )
-    mc3.metric(
-        "20 pts%", f"{pts20_pct:.1f}%",
-        help="Weeks scoring 20+ fantasy points ÷ games played",
-    )
-
-    # ── Stacked bar chart ────────────────────────────────────────────────────
-    tier_domain = [f"{pos}1", f"{pos}2", f"{pos}3", f"{pos}4+"]
-    tier_range  = ["#27ae60", "#2980b9", "#f39c12", "#c0392b"]
-
-    chart = (
-        alt.Chart(chart_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("Season:O", title="Season"),
-            y=alt.Y("Weeks:Q", title="Weeks", stack="zero"),
-            color=alt.Color(
-                "Tier:N",
-                scale=alt.Scale(domain=tier_domain, range=tier_range),
-                legend=alt.Legend(title="Tier", orient="right"),
-            ),
-            order=alt.Order("ord:Q", sort="ascending"),
-            tooltip=[
-                alt.Tooltip("Season:O"),
-                alt.Tooltip("Tier:N"),
-                alt.Tooltip("Weeks:Q"),
-            ],
-        )
-        .properties(
-            height=280,
-            title=f"{pname} — {fmt_label} · {league_size}-team",
-        )
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-    # Caption
-    if view_mode == "Multi-Year":
-        season_str = ", ".join(str(int(s)) for s in sorted(seasons_to_show))
-        st.caption(f"Seasons: {season_str}  ·  Total games: {total_games}")
-    else:
-        r = player_data.iloc[0]
-        avg  = float(r["avg_fpts"])
-        bust = float(r["bust_pct"])
-        st.caption(
-            f"Season: {int(r['season'])}  ·  Games: {total_games}  ·  "
-            f"Avg: {avg:.1f} pts  ·  Bust (<5 pts): {bust:.1f}%"
-        )
-
-
-def _tier_tab(tiers_df):
-    if tiers_df.empty:
-        st.info("No tier data — run `py 06_tier_consistency.py` to generate it.")
-        return
-
-    # ── Row 1: position / scoring / league size / view mode ──────────────────
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    with c1:
-        pos_sel = st.selectbox("Position", ["QB", "RB", "WR", "TE"], index=2, key="tier_pos")
-    with c2:
-        fmt_sel = st.selectbox("Scoring Format", list(TIER_SCORING_MAP.keys()), key="tier_fmt")
-    with c3:
-        league_sel = st.selectbox("League Size", [10, 12, 14, 16], index=1, key="tier_league")
-    with c4:
-        view_mode = st.radio(
-            "View Mode", ["Single Season", "Multi-Year"],
-            horizontal=True, key="tier_view",
-        )
-
-    fmt_key  = TIER_SCORING_MAP[fmt_sel]
-    pos_data = tiers_df[
-        (tiers_df["position"] == pos_sel) &
-        (tiers_df["scoring_format"] == fmt_key) &
-        (tiers_df["league_size"] == league_sel)
-    ]
-    seasons_available = sorted(pos_data["season"].unique().tolist())
-
-    # ── Row 2: player / season or year-range / compare toggle ────────────────
-    r2c1, r2c2, r2c3 = st.columns([3, 2, 2])
-
-    with r2c2:
-        if view_mode == "Single Season":
-            default_idx = len(seasons_available) - 1  # 2024 by default
-            season_sel      = st.selectbox(
-                "Season", seasons_available, index=default_idx, key="tier_season",
-            )
-            seasons_to_show = [season_sel]
-        else:
-            year_range = st.radio(
-                "Year Range",
-                ["Last 2 Years", "Last 3 Years", "All 4 Years"],
-                horizontal=True, key="tier_years",
-            )
-            n_years         = {"Last 2 Years": 2, "Last 3 Years": 3, "All 4 Years": 4}[year_range]
-            seasons_to_show = sorted(seasons_available)[-n_years:]
-
-    # Build player list from the selected seasons
-    players_in_range = pos_data[pos_data["season"].isin(seasons_to_show)]["player_name"].unique()
-    player_opts      = sorted(players_in_range.tolist())
-
-    if not player_opts:
-        st.warning("No players found for this combination.")
-        return
-
-    with r2c1:
-        player_sel = st.selectbox("Player", player_opts, key="tier_player")
-
-    with r2c3:
-        compare_on  = st.toggle("Compare Players", key="tier_compare")
-        player2_sel = None
-        if compare_on:
-            other_opts = [p for p in player_opts if p != player_sel]
-            if other_opts:
-                player2_sel = st.selectbox("Compare with", other_opts, key="tier_player2")
-
-    st.divider()
-
-    # ── Render ────────────────────────────────────────────────────────────────
-    if compare_on and player2_sel:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f"#### {player_sel}")
-            _render_tier_player(
-                player_sel, pos_data, pos_sel, fmt_sel, league_sel, view_mode, seasons_to_show,
-            )
-        with col2:
-            st.markdown(f"#### {player2_sel}")
-            _render_tier_player(
-                player2_sel, pos_data, pos_sel, fmt_sel, league_sel, view_mode, seasons_to_show,
-            )
-    else:
-        _render_tier_player(
-            player_sel, pos_data, pos_sel, fmt_sel, league_sel, view_mode, seasons_to_show,
-        )
+    # ── Historical Tier Consistency ───────────────────────────────────────────
+    _projection_tier_section(pid, pos, tiers_df)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -908,18 +889,13 @@ def main():
         proj_games = st.slider("Projected Games", 1, 17, 17)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_proj, tab_adp, tab_tier = st.tabs(
-        ["📊 Projections", "📈 ADP & Market", "🏆 Tier History"]
-    )
+    tab_proj, tab_adp = st.tabs(["📊 Projections", "📈 ADP & Market"])
 
     with tab_proj:
-        _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring)
+        _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df)
 
     with tab_adp:
-        _adp_tab(adp_cur, adp_hist, adp_trends)
-
-    with tab_tier:
-        _tier_tab(tiers_df)
+        _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df)
 
 
 main()
