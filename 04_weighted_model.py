@@ -134,6 +134,17 @@ print(f"\n  Projecting: {PROJ_YEAR} season")
 print(f"  Most recent data: {BASE_SEASON}")
 print(f"  Seasons available: {sorted(seasonal['season'].unique())}")
 
+# ── Positional per-game averages for games-played regression ─────────────────
+_base = seasonal[(seasonal["season"] == BASE_SEASON) & (seasonal["games"].fillna(0) > 0)].copy()
+POS_AVG_PG = {}
+for _p in ("QB", "RB", "WR", "TE"):
+    _pdata = _base[_base["position"] == _p]
+    POS_AVG_PG[_p] = {}
+    for _metric in ["targets", "carries", "attempts"]:
+        if _metric in _pdata.columns:
+            _vals = _pdata[_metric].fillna(0) / _pdata["games"]
+            POS_AVG_PG[_p][_metric] = float(_vals.median())
+
 # ─────────────────────────────────────────────────────────────────────────────
 # WEIGHTED AVERAGE FUNCTION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +222,22 @@ for _, player in latest.iterrows():
     # Age multiplier
     age_mult = get_age_multiplier(pos, age)
 
+    # Games-played regression
+    games_recent = int(player["games"]) if not np.isnan(player["games"]) else 17
+    reg_wt = 0.20 if games_recent < 14 else 0.0
+    def regress_pg(val, metric, _pos=pos, _rw=reg_wt):
+        if _rw == 0.0 or pd.isna(val):
+            return val
+        pos_med = POS_AVG_PG.get(_pos, {}).get(metric, val)
+        return val * (1 - _rw) + pos_med * _rw
+
+    if games_recent >= 14:
+        proj_confidence = "High"
+    elif games_recent >= 8:
+        proj_confidence = "Medium"
+    else:
+        proj_confidence = "Low"
+
     # Team context
     team_row = latest_team_stats[latest_team_stats["team"] == team]
     team_targets  = team_row["avg_targets_game"].values[0]  if not team_row.empty else 35
@@ -246,17 +273,24 @@ for _, player in latest.iterrows():
             tgt_p = get_pct("targets", pct_col)
             tgt_per_game = tgt_p if not np.isnan(tgt_p) else (w_tgt_share or 0.15) * team_targets
 
+            # Regress toward positional avg if player missed games
+            tgt_per_game = regress_pg(tgt_per_game, "targets")
+
             # Apply age curve to volume
             tgt_per_game = tgt_per_game * age_mult
 
             # Efficiency metrics — anchored to weighted history, NOT age-adjusted
-            td_per_tgt = weighted_avg(pid, "receiving_tds", seasonal)
-            td_per_tgt = (td_per_tgt / weighted_avg(pid, "targets", seasonal)) if weighted_avg(pid, "targets", seasonal) else 0.05
+            _w_rec_tds = weighted_avg(pid, "receiving_tds", seasonal)
+            td_per_tgt = (
+                _w_rec_tds / w_catch_rate_den
+                if (w_catch_rate_den and not np.isnan(w_catch_rate_den) and not np.isnan(_w_rec_tds))
+                else 0.05
+            )
 
             season_tgt  = tgt_per_game * GAMES
             season_rec  = season_tgt * catch_rate
             season_yds  = season_rec * yds_per_rec
-            season_tds  = season_tgt * (td_per_tgt or 0.05)
+            season_tds  = min(season_tgt * (td_per_tgt or 0.05), 15.0)
 
             proj = {
                 "targets": safe_round(season_tgt),
@@ -271,6 +305,7 @@ for _, player in latest.iterrows():
             car_p = get_pct("carries", pct_col)
             w_carries = weighted_avg(pid, "carries", seasonal)
             carries_pg = car_p if not np.isnan(car_p) else (w_carries or 8)
+            carries_pg = regress_pg(carries_pg, "carries")
             carries_pg = carries_pg * age_mult
 
             w_rush_yds = weighted_avg(pid, "rushing_yards", seasonal)
@@ -281,6 +316,7 @@ for _, player in latest.iterrows():
             tgt_p = get_pct("targets", pct_col)
             w_tgts = weighted_avg(pid, "targets", seasonal)
             tgt_pg = tgt_p if not np.isnan(tgt_p) else (w_tgts or 2)
+            tgt_pg = regress_pg(tgt_pg, "targets")
             tgt_pg = tgt_pg * age_mult
 
             w_rec = weighted_avg(pid, "receptions", seasonal)
@@ -300,19 +336,21 @@ for _, player in latest.iterrows():
             }
 
         elif pos == "QB":
-            att_p = get_pct("attempts", pct_col)
-            w_att = weighted_avg(pid, "attempts", seasonal)
-            att_pg = att_p if not np.isnan(att_p) else (w_att or 32)
-            att_pg = att_pg * age_mult
-
-            w_py  = weighted_avg(pid, "passing_yards", seasonal)
-            w_ptd = weighted_avg(pid, "passing_tds", seasonal)
-            w_int = weighted_avg(pid, "interceptions", seasonal)
+            w_att  = weighted_avg(pid, "attempts", seasonal)
+            w_py   = weighted_avg(pid, "passing_yards", seasonal)
+            w_ptd  = weighted_avg(pid, "passing_tds", seasonal)
+            w_int  = weighted_avg(pid, "interceptions", seasonal)
             w_comp = weighted_avg(pid, "completions", seasonal)
 
             ypa    = (w_py  / w_att) if w_att else 7.2
             td_att = (w_ptd / w_att) if w_att else 0.045
+            td_att = min(td_att, 0.055)  # cap: ~38 TDs per 700 attempts — regresses to mean
             int_att = (w_int / w_att) if w_att else 0.02
+
+            att_p  = get_pct("attempts", pct_col)
+            att_pg = att_p if not np.isnan(att_p) else (w_att or 32)
+            att_pg = regress_pg(att_pg, "attempts")
+            att_pg = att_pg * age_mult
 
             w_rush = weighted_avg(pid, "rushing_yards", seasonal)
             w_rtd  = weighted_avg(pid, "rushing_tds", seasonal)
@@ -346,6 +384,8 @@ for _, player in latest.iterrows():
             "scenario":     scenario,
             "season_proj":  PROJ_YEAR,
             "model":        "weighted_v1",
+            "projection_confidence": proj_confidence,
+            "games_recent": games_recent,
         })
         all_projections.append(proj)
 

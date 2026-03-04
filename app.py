@@ -294,7 +294,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     with ctrl2:
         sort_by = st.selectbox(
             "Sort by",
-            ["ADP", "Model Rank", "Value Score ↑", "Value Score ↓"],
+            ["Best Ball ADP (Underdog)", "Model Rank", "Value Score ↑", "Value Score ↓"],
             key="adp_sort",
         )
     with ctrl3:
@@ -343,10 +343,10 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
         }, inplace=True)
 
     sort_map = {
-        "ADP":             ("adp", True),
-        "Model Rank":      ("model_overall_rank", True),
-        "Value Score ↑":   ("value_score", False),
-        "Value Score ↓":   ("value_score", True),
+        "Best Ball ADP (Underdog)": ("adp", True),
+        "Model Rank":               ("model_overall_rank", True),
+        "Value Score ↑":            ("value_score", False),
+        "Value Score ↓":            ("value_score", True),
     }
     scol, sasc = sort_map.get(sort_by, ("adp", True))
     if scol in df.columns:
@@ -357,7 +357,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
         "Player":             "Player",
         "position":           "Pos",
         "team":               "Team",
-        "adp":                "ADP",
+        "adp":                "Best Ball ADP (Underdog)",
         "model_overall_rank": "Model Rank",
         "model_pos_rank_str": "Pos Rank",
         "fpts_ppr":           "Proj PPR",
@@ -394,7 +394,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
         return ""
 
     fmt = {}
-    if "ADP"         in table.columns: fmt["ADP"]         = lambda v: f"{int(v)}" if pd.notna(v) else "—"
+    if "Best Ball ADP (Underdog)" in table.columns: fmt["Best Ball ADP (Underdog)"] = lambda v: f"{v:.1f}" if pd.notna(v) else "—"
     if "Model Rank"  in table.columns: fmt["Model Rank"]  = lambda v: f"{int(v)}" if pd.notna(v) else "—"
     if "Proj PPR"    in table.columns: fmt["Proj PPR"]    = lambda v: f"{v:.1f}"  if pd.notna(v) else "—"
     if "Value Score" in table.columns: fmt["Value Score"] = lambda v: f"{v:+.0f}" if pd.notna(v) else "—"
@@ -412,7 +412,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     st.subheader(f"Current Rankings — {len(df)} players shown")
     st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
     st.caption(
-        f"ADP = Sleeper `search_rank` (lower is better)  ·  "
+        f"Best Ball ADP = Underdog March 4 draft position (lower is better)  ·  "
         f"Value Score = ADP − Model Rank (positive = undervalued by market)  ·  "
         f"Tier metrics = 12-team PPR, most recent season  ·  "
         f"Snapshot: {snapshot_date}"
@@ -436,11 +436,11 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
                 .sort_values("value_score", ascending=False)
                 .head(8)[["Player", "position", "adp", "model_overall_rank", "value_score"]]
             )
-            vals.columns = ["Player", "Pos", "ADP", "Model", "Value"]
+            vals.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
             st.dataframe(
                 vals.style
                 .applymap(lambda _: "background-color:#d9f7d6", subset=["Value"])
-                .format({"ADP": "{:.0f}", "Model": "{:.0f}", "Value": "+{:.0f}"}),
+                .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "+{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
 
@@ -451,11 +451,11 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
                 .sort_values("value_score")
                 .head(8)[["Player", "position", "adp", "model_overall_rank", "value_score"]]
             )
-            over.columns = ["Player", "Pos", "ADP", "Model", "Value"]
+            over.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
             st.dataframe(
                 over.style
                 .applymap(lambda _: "background-color:#f7d6d6", subset=["Value"])
-                .format({"ADP": "{:.0f}", "Model": "{:.0f}", "Value": "{:.0f}"}),
+                .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
 
