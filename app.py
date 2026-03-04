@@ -14,9 +14,17 @@ st.set_page_config(
 @st.cache_data(ttl=0)
 def load_data():
     seasonal   = pd.read_csv("data/player_seasonal_stats.csv")
-    variance   = pd.read_csv("data/player_variance.csv")
     team_stats = pd.read_csv("data/team_season_stats.csv")
-    return seasonal, variance, team_stats
+    return seasonal, team_stats
+
+
+@st.cache_data(ttl=0)
+def load_projections():
+    from pathlib import Path
+    f = Path("data/projections_weighted.csv")
+    if not f.exists():
+        return pd.DataFrame()
+    return pd.read_csv(f)
 
 
 @st.cache_data(ttl=0)
@@ -53,6 +61,13 @@ def load_adp_data():
 
 SCORING_FORMATS = ["PPR", "Half PPR", "Standard", "TE Premium"]
 
+SCORING_COL = {
+    "PPR":        "fpts_ppr",
+    "Half PPR":   "fpts_half_ppr",
+    "Standard":   "fpts_standard",
+    "TE Premium": "fpts_te_premium",
+}
+
 TIER_SCORING_MAP = {
     "PPR":        "ppr",
     "Half PPR":   "half_ppr",
@@ -61,25 +76,6 @@ TIER_SCORING_MAP = {
 }
 
 
-def calc_fp(rec_yds, rec_tds, rec, rush_yds, rush_tds,
-            pass_yds, pass_tds, ints, position, fmt):
-    pts = (
-        rec_yds / 10.0  + rec_tds  * 6.0 +
-        rush_yds / 10.0 + rush_tds * 6.0 +
-        pass_yds / 25.0 + pass_tds * 4.0 - ints * 2.0
-    )
-    if fmt == "PPR":
-        pts += rec
-    elif fmt == "Half PPR":
-        pts += rec * 0.5
-    elif fmt == "TE Premium":
-        pts += rec * (1.5 if position == "TE" else 1.0)
-    # Standard: no reception bonus
-    return max(round(float(pts), 1), 0.0)
-
-
-# ── Projection Engine ─────────────────────────────────────────────────────────
-
 def _f(val):
     """Safe float conversion with NaN fallback to 0."""
     try:
@@ -87,192 +83,6 @@ def _f(val):
         return 0.0 if np.isnan(v) else v
     except (TypeError, ValueError):
         return 0.0
-
-
-def compute_projection(player_id, seasonal, variance, team_stats,
-                        games_proj, scoring,
-                        ts_slider=None, cpg_slider=None):
-    """
-    Returns a dict with bear / base / bull scenario stats and FP,
-    plus metadata about the player, team context, and slider defaults.
-
-    ts_slider  : float or None — target share override (0.0–1.0 decimal)
-    cpg_slider : float or None — carries per game override
-    """
-    seas = seasonal[seasonal["player_id"] == player_id].sort_values("season")
-    if seas.empty:
-        return None
-
-    row  = seas.iloc[-1]
-    g    = max(_f(row.get("games", 1)), 1.0)
-    pos  = row["position"]
-    team = row["team"]
-    szn  = int(row["season"])
-
-    # Historical per-game stats
-    def hpg(col):
-        return _f(row.get(col, 0)) / g
-
-    h_tgt   = hpg("targets")
-    h_rec   = hpg("receptions")
-    h_ryds  = hpg("receiving_yards")
-    h_rtds  = hpg("receiving_tds")
-    h_car   = hpg("carries")
-    h_rushy = hpg("rushing_yards")
-    h_rusht = hpg("rushing_tds")
-    h_passy = hpg("passing_yards")
-    h_passt = hpg("passing_tds")
-    h_ints  = hpg("interceptions")
-    h_ts    = _f(row.get("target_share", 0))
-
-    # Efficiency rates (kept constant across scenarios)
-    catch_r   = h_rec  / h_tgt  if h_tgt  > 0 else 0.0
-    yds_p_tgt = h_ryds / h_tgt  if h_tgt  > 0 else 0.0
-    td_p_tgt  = h_rtds / h_tgt  if h_tgt  > 0 else 0.0
-    yds_p_car = h_rushy / h_car if h_car  > 0 else 0.0
-    td_p_car  = h_rusht / h_car if h_car  > 0 else 0.0
-
-    # Team context
-    tr = team_stats[(team_stats["team"] == team) & (team_stats["season"] == szn)]
-    if tr.empty:
-        tr = team_stats[team_stats["team"] == team].sort_values("season").tail(1)
-    team_tgt_pg = _f(tr.iloc[0]["avg_targets_game"]) if not tr.empty else 35.0
-    team_car_pg = _f(tr.iloc[0]["avg_carries_game"]) if not tr.empty else 27.0
-
-    # Variance lookup helpers
-    var = variance[(variance["player_id"] == player_id) & (variance["season"] == szn)]
-
-    def gv(metric, pct, fallback):
-        vr = var[var["metric"] == metric]
-        if vr.empty:
-            return fallback
-        val = vr.iloc[0][pct]
-        return _f(val) if pd.notna(val) else fallback
-
-    # Median (base) values from variance, or fall back to historical per-game
-    tgt_med   = gv("targets",        "median", h_tgt)
-    ryds_med  = gv("receiving_yards","median", h_ryds)
-    rtds_med  = gv("receiving_tds",  "median", h_rtds)
-    car_med   = gv("carries",        "median", h_car)
-    rushy_med = gv("rushing_yards",  "median", h_rushy)
-    rusht_med = gv("rushing_tds",    "median", h_rusht)
-    passy_med = gv("passing_yards",  "median", h_passy)
-    passt_med = gv("passing_tds",    "median", h_passt)
-    ts_med    = gv("target_share",   "median", h_ts)
-
-    # P25 / P75 ratios relative to median (for bear / bull scaling)
-    def ratio(metric, pct, med, default):
-        raw = gv(metric, pct, med * default)
-        return raw / med if med > 0 else default
-
-    tgt_bear_r   = ratio("targets",        "p25", tgt_med,   0.65)
-    tgt_bull_r   = ratio("targets",        "p75", tgt_med,   1.35)
-    car_bear_r   = ratio("carries",        "p25", car_med,   0.65)
-    car_bull_r   = ratio("carries",        "p75", car_med,   1.35)
-    passy_bear_r = ratio("passing_yards",  "p25", passy_med, 0.65)
-    passy_bull_r = ratio("passing_yards",  "p75", passy_med, 1.35)
-    passt_bear_r = ratio("passing_tds",    "p25", passt_med, 0.55)
-    passt_bull_r = ratio("passing_tds",    "p75", passt_med, 1.45)
-
-    # ── Apply slider overrides to base ──────────────────────────────────────
-    # Sliders shift the BASE; bear/bull scale proportionally from the new base.
-    base_tgt  = tgt_med
-    base_car  = car_med
-    base_ts   = ts_med
-
-    if ts_slider is not None:
-        new_tgt  = ts_slider * team_tgt_pg
-        # Scale receiving yards/TDs proportionally with the target change
-        if tgt_med > 0:
-            tgt_scale = new_tgt / tgt_med
-            ryds_med  = ryds_med  * tgt_scale
-            rtds_med  = rtds_med  * tgt_scale
-        base_tgt = new_tgt
-        base_ts  = ts_slider
-
-    if cpg_slider is not None:
-        if car_med > 0:
-            car_scale = cpg_slider / car_med
-            rushy_med = rushy_med * car_scale
-            rusht_med = rusht_med * car_scale
-        else:
-            rushy_med = cpg_slider * yds_p_car
-            rusht_med = cpg_slider * td_p_car
-        base_car = cpg_slider
-
-    # ── Build per-game stats for each scenario ───────────────────────────────
-    scenarios = {
-        "bear": {
-            "tgt":   base_tgt  * tgt_bear_r,
-            "ryds":  ryds_med  * tgt_bear_r,
-            "rtds":  rtds_med  * tgt_bear_r,
-            "car":   base_car  * car_bear_r,
-            "rushy": rushy_med * car_bear_r,
-            "rusht": rusht_med * car_bear_r,
-            "passy": passy_med * passy_bear_r,
-            "passt": passt_med * passt_bear_r,
-            "ints":  h_ints * 1.15,   # slightly more picks in bear
-        },
-        "base": {
-            "tgt":   base_tgt,
-            "ryds":  ryds_med,
-            "rtds":  rtds_med,
-            "car":   base_car,
-            "rushy": rushy_med,
-            "rusht": rusht_med,
-            "passy": passy_med,
-            "passt": passt_med,
-            "ints":  h_ints,
-        },
-        "bull": {
-            "tgt":   base_tgt  * tgt_bull_r,
-            "ryds":  ryds_med  * tgt_bull_r,
-            "rtds":  rtds_med  * tgt_bull_r,
-            "car":   base_car  * car_bull_r,
-            "rushy": rushy_med * car_bull_r,
-            "rusht": rusht_med * car_bull_r,
-            "passy": passy_med * passy_bull_r,
-            "passt": passt_med * passt_bull_r,
-            "ints":  h_ints * 0.85,   # fewer picks in bull
-        },
-    }
-
-    # ── Compute season totals and FP ─────────────────────────────────────────
-    g2 = float(games_proj)
-
-    built = {}
-    for name, s in scenarios.items():
-        rec_season   = s["tgt"] * catch_r * g2
-        fp = calc_fp(
-            s["ryds"] * g2, s["rtds"] * g2, rec_season,
-            s["rushy"] * g2, s["rusht"] * g2,
-            s["passy"] * g2, s["passt"] * g2,
-            s["ints"]  * g2,
-            pos, scoring,
-        )
-        built[name] = dict(
-            fp           = fp,
-            targets      = round(s["tgt"]   * g2, 1),
-            receptions   = round(rec_season,       1),
-            rec_yds      = round(s["ryds"]  * g2, 1),
-            rec_tds      = round(s["rtds"]  * g2, 1),
-            carries      = round(s["car"]   * g2, 1),
-            rush_yds     = round(s["rushy"] * g2, 1),
-            rush_tds     = round(s["rusht"] * g2, 1),
-            pass_yds     = round(s["passy"] * g2, 1),
-            pass_tds     = round(s["passt"] * g2, 1),
-            ints         = round(s["ints"]  * g2, 1),
-            target_share = round(base_ts * 100,    1),
-        )
-
-    return dict(
-        pos=pos, team=team, season=szn, games_played=int(g),
-        games_proj=games_proj,
-        bear=built["bear"], base=built["base"], bull=built["bull"],
-        h_ts=h_ts, h_cpg=h_car,
-        cur_ts=base_ts, cur_cpg=base_car,
-        team_tgt_pg=team_tgt_pg, team_car_pg=team_car_pg,
-    )
 
 
 # ── ADP Tab ───────────────────────────────────────────────────────────────────
@@ -394,8 +204,8 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     def _vs_color(val):
         if pd.isna(val):
             return ""
-        a = min(abs(val) / 30, 1.0)   # ±30 positional spots = max opacity
-        opacity = round(0.06 + a * 0.14, 3)  # 0.06 – 0.20
+        a = min(abs(val) / 30, 1.0)
+        opacity = round(0.06 + a * 0.14, 3)
         if val > 0:
             return f"background-color:rgba(0,180,80,{opacity})"
         if val < 0:
@@ -627,139 +437,78 @@ def _projection_tier_section(pid, pos, tiers_df):
     top25_total  = int(stat_data["boom_top25_weeks"].sum())
     pts20_total  = int(stat_data["boom_20pts_weeks"].sum())
 
-    tier1_pct = round(t1_total   / total_games * 100, 1) if total_games else 0.0
+    tier1_pct = round(t1_total    / total_games * 100, 1) if total_games else 0.0
     top25_pct = round(top25_total / total_games * 100, 1) if total_games else 0.0
     pts20_pct = round(pts20_total / total_games * 100, 1) if total_games else 0.0
 
     sc1, sc2, sc3 = st.columns(3)
-    sc1.metric(
-        f"{pos}1%",
-        f"{tier1_pct:.1f}%",
-        help=f"{pos}1 weeks ÷ games played",
-    )
-    sc2.metric(
-        "Top 25%",
-        f"{top25_pct:.1f}%",
-        help="Weeks finishing top 25% of position ÷ games played",
-    )
-    sc3.metric(
-        "20 pts%",
-        f"{pts20_pct:.1f}%",
-        help="Weeks scoring 20+ fantasy points ÷ games played",
-    )
+    sc1.metric(f"{pos}1%",  f"{tier1_pct:.1f}%", help=f"{pos}1 weeks ÷ games played")
+    sc2.metric("Top 25%",   f"{top25_pct:.1f}%", help="Weeks finishing top 25% of position ÷ games played")
+    sc3.metric("20 pts%",   f"{pts20_pct:.1f}%", help="Weeks scoring 20+ fantasy points ÷ games played")
 
     seasons_shown = ", ".join(str(int(s)) for s in stat_data["season"].tolist())
     st.caption(f"Stat cards: {seasons_shown}  ·  {total_games} games")
 
 
-def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df):
-    # ── Resolve player ────────────────────────────────────────────────────────
-    prow = idx[idx["player_name"] == selected]
-    if prow.empty:
-        st.error("Player not found in data.")
-        return
-    pid = prow.iloc[0]["player_id"]
+def _projection_tab(selected, proj_df, seasonal, team_stats, scoring, tiers_df):
+    fp_col = SCORING_COL.get(scoring, "fpts_ppr")
 
-    init = compute_projection(pid, seasonal, variance, team_stats, proj_games, scoring)
-    if init is None:
-        st.error("No data available for this player.")
+    # ── Look up all three scenarios from projections_weighted.csv ─────────────
+    player_projs = proj_df[proj_df["player_name"] == selected]
+    if player_projs.empty:
+        st.error(f"No projection data found for '{selected}'. Re-run `py 04_weighted_model.py`.")
         return
 
-    pos  = init["pos"]
-    team = init["team"]
-    szn  = init["season"]
+    base_row = player_projs[player_projs["scenario"] == "base"]
+    bear_row = player_projs[player_projs["scenario"] == "bear"]
+    bull_row = player_projs[player_projs["scenario"] == "bull"]
 
-    # ── Header ───────────────────────────────────────────────────────────────
+    if base_row.empty:
+        st.error("Missing base scenario in projections_weighted.csv.")
+        return
+
+    base_s = base_row.iloc[0]
+    bear_s = bear_row.iloc[0] if not bear_row.empty else base_s
+    bull_s = bull_row.iloc[0] if not bull_row.empty else base_s
+
+    pid        = base_s["player_id"]
+    pos        = base_s["position"]
+    team       = base_s["team"]
+    age        = base_s["age"]
+    confidence = base_s.get("projection_confidence", "")
+    returning  = bool(base_s.get("returning_from_injury", False))
+
+    base_fp = _f(base_s[fp_col])
+    bear_fp = _f(bear_s[fp_col])
+    bull_fp = _f(bull_s[fp_col])
+
+    # ── Header ────────────────────────────────────────────────────────────────
     POS_COLOR = {"QB": "#e74c3c", "RB": "#27ae60", "WR": "#2980b9", "TE": "#d68910"}
     color = POS_COLOR.get(pos, "#7f8c8d")
 
     col_hdr, _ = st.columns([3, 1])
     with col_hdr:
-        st.markdown(
-            f"## {selected} "
+        badges = (
             f'<span style="background:{color};color:#fff;padding:3px 10px;'
-            f'border-radius:5px;font-size:0.65em;vertical-align:middle">{pos}</span>',
-            unsafe_allow_html=True,
+            f'border-radius:5px;font-size:0.65em;vertical-align:middle">{pos}</span>'
         )
-        st.caption(f"**{team}**  ·  Base season: **{szn}**  ·  Played **{init['games_played']}** games  ·  {scoring}")
+        if returning:
+            badges += (
+                ' <span style="background:#8e44ad;color:#fff;padding:3px 8px;'
+                'border-radius:5px;font-size:0.65em;vertical-align:middle">↩ Returning</span>'
+            )
+        st.markdown(f"## {selected} {badges}", unsafe_allow_html=True)
+        age_str = f"{int(age)}" if pd.notna(age) else "—"
+        st.caption(f"**{team}**  ·  Age: **{age_str}**  ·  {scoring}  ·  Confidence: **{confidence}**")
     st.divider()
 
-    # ── Adjustment Sliders ────────────────────────────────────────────────────
-    show_ts  = pos in ("WR", "TE") or (pos == "RB" and init["h_ts"] > 0.02)
-    show_cpg = pos in ("RB", "QB")
-
-    ts_slider  = None
-    cpg_slider = None
-
-    if show_ts or show_cpg:
-        st.subheader("Adjust Usage")
-        ncols = sum([show_ts, show_cpg])
-        slider_cols = st.columns(ncols + 1)
-
-        col_i = 0
-        if show_ts:
-            default_ts = round(init["h_ts"] * 100, 1)
-            max_ts     = float(min(max(default_ts + 15.0, 30.0), 50.0))
-            with slider_cols[col_i]:
-                ts_pct = st.slider(
-                    "Target Share (%)", min_value=0.0, max_value=max_ts,
-                    value=default_ts, step=0.5,
-                    help="% of team targets going to this player each game",
-                )
-            ts_slider = ts_pct / 100.0
-            col_i += 1
-
-        if show_cpg:
-            default_cpg = round(init["h_cpg"], 1)
-            max_cpg     = float(min(max(default_cpg + 10.0, 20.0), 35.0))
-            with slider_cols[col_i]:
-                cpg_val = st.slider(
-                    "Carries per Game", min_value=0.0, max_value=max_cpg,
-                    value=default_cpg, step=0.5,
-                    help="Rushing attempts per game",
-                )
-            cpg_slider = cpg_val
-            col_i += 1
-
-        with slider_cols[col_i]:
-            if show_ts and ts_slider is not None:
-                implied_tgt = round(ts_slider * init["team_tgt_pg"], 1)
-                st.info(
-                    f"**{ts_pct:.1f}%** of team's "
-                    f"{init['team_tgt_pg']:.1f} targets/game\n\n"
-                    f"≈ **{implied_tgt} targets/game**"
-                )
-            if show_cpg and cpg_slider is not None:
-                st.info(
-                    f"**{cpg_val:.1f}** carries/game\n\n"
-                    f"vs team avg **{init['team_car_pg']:.1f}** total carries/game"
-                )
-
-    result = compute_projection(
-        pid, seasonal, variance, team_stats,
-        proj_games, scoring, ts_slider, cpg_slider,
-    )
-
-    # ── Bear / Base / Bull ────────────────────────────────────────────────────
-    st.subheader(f"Season Projections — {proj_games} games · {scoring}")
+    # ── Bear / Base / Bull FP cards ───────────────────────────────────────────
+    st.subheader(f"Season Projections — 17 games · {scoring}")
 
     c1, c2, c3 = st.columns(3)
-    bear_fp = result["bear"]["fp"]
-    base_fp = result["base"]["fp"]
-    bull_fp = result["bull"]["fp"]
-
-    c1.metric(
-        "🐻  Bear", f"{bear_fp:.1f} pts",
-        delta=f"{bear_fp - init['bear']['fp']:+.1f}" if (ts_slider or cpg_slider) else None,
-    )
-    c2.metric(
-        "📊  Base", f"{base_fp:.1f} pts",
-        delta=f"{base_fp - init['base']['fp']:+.1f}" if (ts_slider or cpg_slider) else None,
-    )
-    c3.metric(
-        "🐂  Bull", f"{bull_fp:.1f} pts",
-        delta=f"{bull_fp - init['bull']['fp']:+.1f}" if (ts_slider or cpg_slider) else None,
-    )
+    c1.metric("🐻  Bear", f"{bear_fp:.1f} pts")
+    c2.metric("📊  Base", f"{base_fp:.1f} pts")
+    c3.metric("🐂  Bull", f"{bull_fp:.1f} pts")
 
     chart_data = pd.DataFrame({
         "Scenario":       ["Bear", "Base", "Bull"],
@@ -786,50 +535,48 @@ def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, s
     st.divider()
     st.subheader("Projected Stat Line")
 
-    bear_s = result["bear"]
-    base_s = result["base"]
-    bull_s = result["bull"]
+    def sv(row, col):
+        """Safe float from a CSV row."""
+        try:
+            v = float(row.get(col, 0) or 0)
+            return 0.0 if np.isnan(v) else v
+        except (TypeError, ValueError):
+            return 0.0
 
-    def stat_row(label, key, fmt="{:.1f}"):
-        b, m, u = bear_s[key], base_s[key], bull_s[key]
+    def stat_row(label, col, fmt="{:.1f}"):
+        b, m, u = sv(bear_s, col), sv(base_s, col), sv(bull_s, col)
         return {"Stat": label, "🐻 Bear": fmt.format(b), "📊 Base": fmt.format(m), "🐂 Bull": fmt.format(u)}
 
-    def stat_row_str(label, key):
-        b, m, u = bear_s[key], base_s[key], bull_s[key]
-        return {"Stat": label, "🐻 Bear": f"{b}%", "📊 Base": f"{m}%", "🐂 Bull": f"{u}%"}
-
+    GAMES = 17
     if pos == "QB":
         rows = [
-            stat_row("Pass Yards", "pass_yds", "{:.0f}"),
-            stat_row("Pass TDs",   "pass_tds", "{:.1f}"),
-            stat_row("INTs",       "ints",     "{:.1f}"),
-            stat_row("Rush Yards", "rush_yds", "{:.0f}"),
-            stat_row("Rush TDs",   "rush_tds", "{:.1f}"),
+            stat_row("Pass Yards",  "passing_yards",  "{:.0f}"),
+            stat_row("Pass TDs",    "passing_tds",    "{:.1f}"),
+            stat_row("INTs",        "interceptions",  "{:.1f}"),
+            stat_row("Rush Yards",  "rushing_yards",  "{:.0f}"),
+            stat_row("Rush TDs",    "rushing_tds",    "{:.1f}"),
         ]
     elif pos == "RB":
         rows = [
-            stat_row("Carries",    "carries",    "{:.1f}"),
-            stat_row("Rush Yards", "rush_yds",   "{:.0f}"),
-            stat_row("Rush TDs",   "rush_tds",   "{:.1f}"),
-            stat_row("Targets",    "targets",    "{:.1f}"),
-            stat_row("Receptions", "receptions", "{:.1f}"),
-            stat_row("Rec Yards",  "rec_yds",    "{:.0f}"),
-            stat_row("Rec TDs",    "rec_tds",    "{:.1f}"),
+            stat_row("Carries",    "carries",         "{:.1f}"),
+            stat_row("Rush Yards", "rushing_yards",   "{:.0f}"),
+            stat_row("Rush TDs",   "rushing_tds",     "{:.1f}"),
+            stat_row("Targets",    "targets",         "{:.1f}"),
+            stat_row("Receptions", "receptions",      "{:.1f}"),
+            stat_row("Rec Yards",  "receiving_yards", "{:.0f}"),
+            stat_row("Rec TDs",    "receiving_tds",   "{:.1f}"),
         ]
-        if init["h_ts"] > 0.02:
-            rows.append(stat_row_str("Target Share", "target_share"))
     else:  # WR / TE
         rows = [
-            stat_row("Targets",    "targets",    "{:.1f}"),
-            stat_row("Receptions", "receptions", "{:.1f}"),
-            stat_row("Rec Yards",  "rec_yds",    "{:.0f}"),
-            stat_row("Rec TDs",    "rec_tds",    "{:.1f}"),
-            stat_row_str("Target Share", "target_share"),
+            stat_row("Targets",    "targets",         "{:.1f}"),
+            stat_row("Receptions", "receptions",      "{:.1f}"),
+            stat_row("Rec Yards",  "receiving_yards", "{:.0f}"),
+            stat_row("Rec TDs",    "receiving_tds",   "{:.1f}"),
         ]
-        if base_s["rush_yds"] > 5:
+        if sv(base_s, "rushing_yards") > 5:
             rows += [
-                stat_row("Rush Yards", "rush_yds", "{:.0f}"),
-                stat_row("Rush TDs",   "rush_tds", "{:.1f}"),
+                stat_row("Rush Yards", "rushing_yards", "{:.0f}"),
+                stat_row("Rush TDs",   "rushing_tds",   "{:.1f}"),
             ]
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -837,31 +584,40 @@ def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, s
     with st.expander("Per-Game Averages"):
         pg_rows = []
         for r in rows:
-            label = r["Stat"]
-            if label == "Target Share":
+            try:
+                pg_rows.append({
+                    "Stat":    r["Stat"],
+                    "🐻 Bear": f"{float(r['🐻 Bear']) / GAMES:.2f}",
+                    "📊 Base": f"{float(r['📊 Base']) / GAMES:.2f}",
+                    "🐂 Bull": f"{float(r['🐂 Bull']) / GAMES:.2f}",
+                })
+            except (ValueError, TypeError):
                 pg_rows.append(r)
-                continue
-            def _pg(val_str, label=label):
-                try:
-                    return f"{float(val_str) / proj_games:.2f}"
-                except (ValueError, TypeError):
-                    return val_str
-            pg_rows.append({
-                "Stat":    label,
-                "🐻 Bear": _pg(r["🐻 Bear"]),
-                "📊 Base": _pg(r["📊 Base"]),
-                "🐂 Bull": _pg(r["🐂 Bull"]),
-            })
         st.dataframe(pd.DataFrame(pg_rows), use_container_width=True, hide_index=True)
 
     with st.expander("Historical Context & Team"):
+        latest_season = int(seasonal["season"].max())
+        tr = team_stats[(team_stats["team"] == team) & (team_stats["season"] == latest_season)]
+        if tr.empty:
+            tr = team_stats[team_stats["team"] == team].sort_values("season").tail(1)
+
+        seas_row = seasonal[
+            (seasonal["player_id"] == pid) & (seasonal["season"] == latest_season)
+        ]
+
         h1, h2, h3, h4 = st.columns(4)
-        h1.metric("Team Targets/Game",  f"{init['team_tgt_pg']:.1f}")
-        h2.metric("Team Carries/Game",  f"{init['team_car_pg']:.1f}")
-        if init["h_ts"] > 0:
-            h3.metric("Historical Target Share", f"{init['h_ts']*100:.1f}%")
-        if init["h_cpg"] > 0:
-            h4.metric("Historical Carries/Game", f"{init['h_cpg']:.1f}")
+        if not tr.empty:
+            h1.metric("Team Targets/Game", f"{_f(tr.iloc[0]['avg_targets_game']):.1f}")
+            h2.metric("Team Carries/Game",  f"{_f(tr.iloc[0]['avg_carries_game']):.1f}")
+        if not seas_row.empty:
+            sr  = seas_row.iloc[0]
+            g   = max(_f(sr.get("games", 1)), 1.0)
+            h_ts  = _f(sr.get("target_share", 0))
+            h_cpg = _f(sr.get("carries", 0)) / g
+            if h_ts > 0:
+                h3.metric("Historical Target Share", f"{h_ts * 100:.1f}%")
+            if h_cpg > 0:
+                h4.metric("Historical Carries/Game", f"{h_cpg:.1f}")
 
         player_seasons = seasonal[
             (seasonal["player_id"] == pid) & (seasonal["season"] >= 2020)
@@ -888,21 +644,35 @@ def _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, s
 # ── App ───────────────────────────────────────────────────────────────────────
 
 def main():
-    seasonal, variance, team_stats = load_data()
+    seasonal, team_stats           = load_data()
+    proj_df                        = load_projections()
     adp_cur, adp_hist, adp_trends  = load_adp_data()
     tiers_df                       = load_tier_data()
 
-    SKILL = {"QB", "RB", "WR", "TE"}
-    latest_season = int(seasonal["season"].max())
-    idx = (
-        seasonal[
-            seasonal["position"].isin(SKILL) &
-            (seasonal["season"] == latest_season)
-        ]
-        [["player_id", "player_name", "position", "team", "season"]]
-        .drop_duplicates("player_id")
-        .sort_values("player_name")
-    )
+    # ── Player index from projections_weighted.csv (High/Medium confidence) ───
+    if not proj_df.empty:
+        idx = (
+            proj_df[
+                (proj_df["scenario"] == "base") &
+                proj_df["projection_confidence"].isin(["High", "Medium"])
+            ]
+            [["player_id", "player_name", "position", "team"]]
+            .drop_duplicates("player_id")
+            .sort_values("player_name")
+        )
+    else:
+        # Fallback if projections_weighted.csv not yet generated
+        SKILL = {"QB", "RB", "WR", "TE"}
+        latest_season = int(seasonal["season"].max())
+        idx = (
+            seasonal[
+                seasonal["position"].isin(SKILL) &
+                (seasonal["season"] == latest_season)
+            ]
+            [["player_id", "player_name", "position", "team"]]
+            .drop_duplicates("player_id")
+            .sort_values("player_name")
+        )
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -927,9 +697,6 @@ def main():
         st.divider()
         scoring = st.radio("Scoring Format", SCORING_FORMATS)
 
-        st.divider()
-        proj_games = st.slider("Projected Games", 1, 17, 17)
-
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_adp, tab_proj = st.tabs(["📈 ADP & Market", "📊 Projections"])
 
@@ -937,7 +704,7 @@ def main():
         _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df)
 
     with tab_proj:
-        _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df)
+        _projection_tab(selected, proj_df, seasonal, team_stats, scoring, tiers_df)
 
 
 main()
