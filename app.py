@@ -11,7 +11,7 @@ st.set_page_config(
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_data():
     seasonal   = pd.read_csv("data/player_seasonal_stats.csv")
     variance   = pd.read_csv("data/player_variance.csv")
@@ -19,7 +19,7 @@ def load_data():
     return seasonal, variance, team_stats
 
 
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_tier_data():
     from pathlib import Path
     f = Path("data/tier_consistency.csv")
@@ -28,7 +28,7 @@ def load_tier_data():
     return pd.read_csv(f)
 
 
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_adp_data():
     from pathlib import Path
     cur_file   = Path("data/adp_current.csv")
