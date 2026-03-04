@@ -301,6 +301,8 @@ for _, player in latest.iterrows():
             season_rec  = season_tgt * catch_rate
             season_yds  = season_rec * yds_per_rec
             season_tds  = min(season_tgt * td_per_tgt, 15.0)
+            if pos == "WR":
+                season_tds = min(season_tds, 12.0)  # WR all-time record cap
 
             proj = {
                 "targets": safe_round(season_tgt),
