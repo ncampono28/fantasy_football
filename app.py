@@ -307,19 +307,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     if search:
         df = df[df["player_name"].str.contains(search, case=False, na=False)]
 
-    # Merge trend arrows if available
-    if not adp_trends.empty and "trend" in adp_trends.columns:
-        df = df.merge(
-            adp_trends[["player_name", "adp_change", "trend"]],
-            on="player_name", how="left",
-        )
-        df["trend"] = df["trend"].fillna("")
-    else:
-        df["trend"] = ""
-
-    df["Player"] = df.apply(
-        lambda r: f"{r['player_name']} {r['trend']}".strip(), axis=1
-    )
+    df["Player"] = df["player_name"]
 
     # ── Merge tier consistency columns (12-team PPR, most recent season) ──────
     if not tiers_df.empty:
@@ -372,25 +360,23 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     def _vs_color(val):
         if pd.isna(val):
             return ""
-        if val > 20:
-            return "background-color:#b7f5b0;color:#0f4d0a"
-        if val > 5:
-            return "background-color:#d9f7d6;color:#1e6b18"
-        if val < -20:
-            return "background-color:#f5b0b0;color:#6b0f0f"
-        if val < -5:
-            return "background-color:#f7d6d6;color:#8b1c1c"
+        a = min(abs(val) / 100, 1.0)   # 0→0.0, 100→1.0
+        opacity = round(0.06 + a * 0.14, 3)  # 0.06 – 0.20
+        if val > 0:
+            return f"background-color:rgba(0,180,80,{opacity})"
+        if val < 0:
+            return f"background-color:rgba(200,50,50,{opacity})"
         return ""
 
     def _tier_pct_color(val):
         if pd.isna(val):
             return ""
         if val >= 60:
-            return "background-color:rgba(0,200,100,0.15)"
+            return "background-color:rgba(0,180,80,0.15)"
         if val >= 40:
-            return "background-color:rgba(0,200,100,0.08)"
+            return "background-color:rgba(0,180,80,0.08)"
         if val < 10:
-            return "background-color:rgba(220,50,50,0.10)"
+            return "background-color:rgba(200,50,50,0.10)"
         return ""
 
     fmt = {}
@@ -439,7 +425,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             vals.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
             st.dataframe(
                 vals.style
-                .applymap(lambda _: "background-color:#d9f7d6", subset=["Value"])
+                .applymap(lambda v: _vs_color(v), subset=["Value"])
                 .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "+{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
@@ -454,7 +440,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             over.columns = ["Player", "Pos", "UD ADP", "Model", "Value"]
             st.dataframe(
                 over.style
-                .applymap(lambda _: "background-color:#f7d6d6", subset=["Value"])
+                .applymap(lambda v: _vs_color(v), subset=["Value"])
                 .format({"UD ADP": "{:.1f}", "Model": "{:.0f}", "Value": "{:.0f}"}),
                 use_container_width=True, hide_index=True,
             )
@@ -891,13 +877,13 @@ def main():
         proj_games = st.slider("Projected Games", 1, 17, 17)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_proj, tab_adp = st.tabs(["📊 Projections", "📈 ADP & Market"])
-
-    with tab_proj:
-        _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df)
+    tab_adp, tab_proj = st.tabs(["📈 ADP & Market", "📊 Projections"])
 
     with tab_adp:
         _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df)
+
+    with tab_proj:
+        _projection_tab(selected, idx, seasonal, variance, team_stats, proj_games, scoring, tiers_df)
 
 
 main()
