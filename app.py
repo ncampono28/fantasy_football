@@ -379,9 +379,15 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             return "background-color:rgba(200,50,50,0.10)"
         return ""
 
+    # Normalize Python None in object columns so they render as "—" not "None"
+    for _col in table.select_dtypes(include="object").columns:
+        table[_col] = table[_col].where(table[_col].notna(), other=None)
+        table[_col] = table[_col].replace({None: np.nan, "None": np.nan, "nan": np.nan})
+
     fmt = {}
     if "Best Ball ADP (Underdog)" in table.columns: fmt["Best Ball ADP (Underdog)"] = lambda v: f"{v:.1f}" if pd.notna(v) else "—"
     if "Model Rank"  in table.columns: fmt["Model Rank"]  = lambda v: f"{int(v)}" if pd.notna(v) else "—"
+    if "Pos Rank"    in table.columns: fmt["Pos Rank"]    = lambda v: str(v) if pd.notna(v) else "—"
     if "Proj PPR"    in table.columns: fmt["Proj PPR"]    = lambda v: f"{v:.1f}"  if pd.notna(v) else "—"
     if "Value Score" in table.columns: fmt["Value Score"] = lambda v: f"{v:+.0f}" if pd.notna(v) else "—"
     if "Tier1%"      in table.columns: fmt["Tier1%"]      = lambda v: f"{v:.1f}%" if pd.notna(v) else "—"
