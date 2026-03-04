@@ -287,10 +287,20 @@ for _, player in latest.iterrows():
                 else 0.05
             )
 
+            # Small-sample guard: < 60 targets in most recent season → regress 50% toward pos avg
+            _POS_AVG_TD_RATE = {"WR": 0.055, "TE": 0.060}
+            _recent_tgts = player["targets"] if not pd.isna(player.get("targets", np.nan)) else 0
+            if _recent_tgts < 60:
+                _pos_avg_td = _POS_AVG_TD_RATE.get(pos, 0.055)
+                td_per_tgt = td_per_tgt * 0.5 + _pos_avg_td * 0.5
+
+            # Rate cap: max 9% TD-per-target
+            td_per_tgt = min(td_per_tgt, 0.09)
+
             season_tgt  = tgt_per_game * GAMES
             season_rec  = season_tgt * catch_rate
             season_yds  = season_rec * yds_per_rec
-            season_tds  = min(season_tgt * (td_per_tgt or 0.05), 15.0)
+            season_tds  = min(season_tgt * td_per_tgt, 15.0)
 
             proj = {
                 "targets": safe_round(season_tgt),
@@ -535,12 +545,12 @@ proj_df.to_csv(DATA / "projections_weighted.csv", index=False)
 base = proj_df[proj_df["scenario"] == "base"].copy()
 
 print(f"\n  ✓ {len(base)} players projected")
-print(f"\n  Top 10 WRs (PPR, base, weighted model):")
+print(f"\n  Top 15 WRs by receiving TDs (base scenario):")
 print(
     base[base["position"] == "WR"]
-    .sort_values("fpts_ppr", ascending=False)
-    [["player_name", "team", "age", "age_multiplier", "targets", "receiving_yards", "fpts_ppr"]]
-    .head(10)
+    .sort_values("receiving_tds", ascending=False)
+    [["player_name", "team", "age", "targets", "receiving_tds", "fpts_ppr"]]
+    .head(15)
     .to_string(index=False)
 )
 
