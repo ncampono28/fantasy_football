@@ -386,13 +386,11 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
         if pd.isna(val):
             return ""
         if val >= 60:
-            return "background-color:#b7f5b0;color:#0f4d0a"
+            return "background-color:rgba(0,200,100,0.15)"
         if val >= 40:
-            return "background-color:#d9f7d6;color:#1e6b18"
-        if val >= 20:
-            return "background-color:#fef9e7"
+            return "background-color:rgba(0,200,100,0.08)"
         if val < 10:
-            return "background-color:#f7d6d6;color:#8b1c1c"
+            return "background-color:rgba(220,50,50,0.10)"
         return ""
 
     fmt = {}
@@ -424,7 +422,11 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     if "value_score" in df.columns and "model_overall_rank" in df.columns:
         st.divider()
         st.subheader("Market Inefficiencies")
-        ranked = df[df["model_overall_rank"].notna() & df["value_score"].notna()].copy()
+        ranked = df[
+            df["model_overall_rank"].notna() &
+            df["value_score"].notna() &
+            (df["adp"] <= 300)
+        ].copy()
 
         mc1, mc2 = st.columns(2)
         with mc1:
