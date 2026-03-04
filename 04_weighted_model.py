@@ -184,7 +184,7 @@ latest = (
     seasonal.sort_values("season")
     .groupby("player_id")
     .last()
-    .reset_index()[["player_id", "team", "position", "age_2026", "games", "carries", "targets"]]
+    .reset_index()[["player_id", "team", "position", "age_2026", "games", "carries", "targets", "attempts"]]
 )
 
 # ── Eligibility filters ────────────────────────────────────────────────────
@@ -347,9 +347,22 @@ for _, player in latest.iterrows():
             td_att = min(td_att, 0.055)  # cap: ~38 TDs per 700 attempts — regresses to mean
             int_att = (w_int / w_att) if w_att else 0.02
 
+            # QB start filter: proxy for games started via season attempts
+            # ~25 att/game × 10 games = 250 attempts threshold
+            qb_recent_att = player["attempts"] if not pd.isna(player["attempts"]) else 0
+            if qb_recent_att < 250:
+                # Backup / spot-starter — override confidence and regress attempts harder
+                proj_confidence = "Low"
+                qb_att_reg = 0.40
+            else:
+                qb_att_reg = reg_wt  # standard 20% or 0%
+
             att_p  = get_pct("attempts", pct_col)
             att_pg = att_p if not np.isnan(att_p) else (w_att or 32)
-            att_pg = regress_pg(att_pg, "attempts")
+            # Apply QB-specific regression (may be 0%, 20%, or 40%)
+            if qb_att_reg > 0.0 and not pd.isna(att_pg):
+                pos_med = POS_AVG_PG.get(pos, {}).get("attempts", att_pg)
+                att_pg = att_pg * (1 - qb_att_reg) + pos_med * qb_att_reg
             att_pg = att_pg * age_mult
 
             w_rush = weighted_avg(pid, "rushing_yards", seasonal)

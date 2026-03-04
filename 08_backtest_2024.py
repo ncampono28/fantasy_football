@@ -275,9 +275,20 @@ for _, player in latest_team.iterrows():
         int_att = (w_int / w_att) if w_att else 0.02
         comp_rt = (w_comp / w_att) if w_att else 0.64
 
+        # QB start filter: proxy for games started via season attempts
+        qb_recent_att = recent["attempts"].values[0] if "attempts" in recent.columns else 0
+        qb_recent_att = qb_recent_att if not (isinstance(qb_recent_att, float) and math.isnan(qb_recent_att)) else 0
+        if qb_recent_att < 250:
+            proj_confidence = "Low"
+            qb_att_reg = 0.40
+        else:
+            qb_att_reg = reg_wt
+
         att_p  = get_pct("attempts", pct_col)
         att_pg = att_p if not np.isnan(att_p) else (w_att or 32)
-        att_pg = regress_pg(att_pg, "attempts")
+        if qb_att_reg > 0.0 and not np.isnan(att_pg):
+            pos_med = POS_AVG_PG.get(pos, {}).get("attempts", att_pg)
+            att_pg = att_pg * (1 - qb_att_reg) + pos_med * qb_att_reg
         att_pg = safe_round(att_pg * age_mult, 1) if not np.isnan(att_pg) else 0
 
         proj = {
