@@ -37,6 +37,16 @@ def load_tier_data():
 
 
 @st.cache_data(ttl=0)
+def load_draft_analysis():
+    from pathlib import Path
+    summary_f = Path("data/draft_analysis_summary.csv")
+    detail_f  = Path("data/draft_analysis.csv")
+    if not summary_f.exists() or not detail_f.exists():
+        return pd.DataFrame(), pd.DataFrame()
+    return pd.read_csv(summary_f), pd.read_csv(detail_f)
+
+
+@st.cache_data(ttl=0)
 def load_adp_data():
     from pathlib import Path
     cur_file   = Path("data/adp_current.csv")
@@ -340,6 +350,150 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             st.altair_chart(spark, use_container_width=True)
         else:
             st.info("Not enough data points for this player yet.")
+
+
+# ── Draft Analysis Tab ────────────────────────────────────────────────────────
+
+def _draft_tab(summary_df, detail_df):
+    if summary_df.empty:
+        st.info("Run `py 07_draft_analysis.py` to generate draft analysis data.")
+        return
+
+    POSITIONS_ORDER = ["QB", "RB", "WR", "TE"]
+    summary = summary_df[summary_df["position"].isin(POSITIONS_ORDER)].copy()
+
+    st.subheader("VORP by Position × Round")
+    st.caption(
+        "Avg VORP (Value Over Replacement Player) for each position/round bucket. "
+        "Brighter = higher average value delivered relative to positional replacement level. "
+        "Based on 2020–2025 half-PPR drafts."
+    )
+
+    heatmap = (
+        alt.Chart(summary)
+        .mark_rect()
+        .encode(
+            x=alt.X(
+                "round_drafted:O",
+                title="Round Drafted",
+                axis=alt.Axis(labelAngle=0),
+                sort=list(range(1, 20)),
+            ),
+            y=alt.Y(
+                "position:N",
+                title=None,
+                sort=POSITIONS_ORDER,
+            ),
+            color=alt.Color(
+                "avg_vorp:Q",
+                title="Avg VORP",
+                scale=alt.Scale(scheme="redyellowgreen", domainMid=0),
+            ),
+            tooltip=[
+                alt.Tooltip("position:N",        title="Position"),
+                alt.Tooltip("round_drafted:O",   title="Round"),
+                alt.Tooltip("avg_vorp:Q",         title="Avg VORP",        format=".1f"),
+                alt.Tooltip("avg_value_score:Q",  title="Avg Value Score", format=".1f"),
+                alt.Tooltip("hit_pct:Q",          title="Hit %",           format=".1f"),
+                alt.Tooltip("steal_pct:Q",        title="Steal %",         format=".1f"),
+                alt.Tooltip("bust_pct:Q",         title="Bust %",          format=".1f"),
+                alt.Tooltip("sample_size:Q",      title="Sample (n)"),
+            ],
+        )
+        .properties(height=220)
+    )
+
+    st.altair_chart(heatmap, use_container_width=True)
+
+    # ── Outcome rate breakdown by position ─────────────────────────────────────
+    st.divider()
+    st.subheader("Outcome Rates by Position × Round")
+
+    pos_filter = st.selectbox(
+        "Position", POSITIONS_ORDER, key="draft_pos_filter"
+    )
+    pos_data = summary[summary["position"] == pos_filter].copy()
+
+    if pos_data.empty:
+        st.info("No data for this position.")
+        return
+
+    outcome_cols = ["steal_pct", "hit_pct", "reach_pct", "bust_pct"]
+    outcome_labels = {"steal_pct": "Steal", "hit_pct": "Hit", "reach_pct": "Reach", "bust_pct": "Bust"}
+    outcome_colors = {"Steal": "#2ecc71", "Hit": "#3498db", "Reach": "#f39c12", "Bust": "#e74c3c"}
+
+    melted = pos_data.melt(
+        id_vars=["round_drafted"],
+        value_vars=outcome_cols,
+        var_name="outcome_key",
+        value_name="pct",
+    )
+    melted["Outcome"] = melted["outcome_key"].map(outcome_labels)
+
+    bars = (
+        alt.Chart(melted)
+        .mark_bar()
+        .encode(
+            x=alt.X("round_drafted:O", title="Round Drafted", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("pct:Q", title="% of Players", stack="normalize"),
+            color=alt.Color(
+                "Outcome:N",
+                scale=alt.Scale(
+                    domain=list(outcome_colors.keys()),
+                    range=list(outcome_colors.values()),
+                ),
+                legend=alt.Legend(orient="top"),
+            ),
+            order=alt.Order("Outcome:N"),
+            tooltip=[
+                alt.Tooltip("round_drafted:O", title="Round"),
+                alt.Tooltip("Outcome:N"),
+                alt.Tooltip("pct:Q", title="%", format=".1f"),
+            ],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(bars, use_container_width=True)
+
+    # ── Top steals / busts table ────────────────────────────────────────────────
+    st.divider()
+    col_s, col_b = st.columns(2)
+
+    with col_s:
+        st.subheader("Top Steals")
+        steals = (
+            detail_df[detail_df["outcome"] == "Steal"]
+            .sort_values("value_score", ascending=False)
+            .head(20)[["season", "player_name", "position", "adp_rank", "actual_rank", "value_score", "vorp"]]
+            .rename(columns={
+                "season": "Year", "player_name": "Player", "position": "Pos",
+                "adp_rank": "ADP", "actual_rank": "Actual Rank",
+                "value_score": "Value Score", "vorp": "VORP",
+            })
+            .reset_index(drop=True)
+        )
+        st.dataframe(
+            steals.style.format({"Value Score": "{:+.0f}", "VORP": "{:.1f}"}),
+            use_container_width=True, hide_index=True, height=340,
+        )
+
+    with col_b:
+        st.subheader("Top Busts")
+        busts = (
+            detail_df[detail_df["outcome"] == "Bust"]
+            .sort_values("value_score")
+            .head(20)[["season", "player_name", "position", "adp_rank", "actual_rank", "value_score", "vorp"]]
+            .rename(columns={
+                "season": "Year", "player_name": "Player", "position": "Pos",
+                "adp_rank": "ADP", "actual_rank": "Actual Rank",
+                "value_score": "Value Score", "vorp": "VORP",
+            })
+            .reset_index(drop=True)
+        )
+        st.dataframe(
+            busts.style.format({"Value Score": "{:+.0f}", "VORP": "{:.1f}"}),
+            use_container_width=True, hide_index=True, height=340,
+        )
 
 
 # ── Projection Tab ─────────────────────────────────────────────────────────────
@@ -697,14 +851,19 @@ def main():
         st.divider()
         scoring = st.radio("Scoring Format", SCORING_FORMATS)
 
+    draft_summary, draft_detail = load_draft_analysis()
+
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_adp, tab_proj = st.tabs(["📈 ADP & Market", "📊 Projections"])
+    tab_adp, tab_proj, tab_draft = st.tabs(["📈 ADP & Market", "📊 Projections", "📋 Draft History"])
 
     with tab_adp:
         _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df)
 
     with tab_proj:
         _projection_tab(selected, proj_df, seasonal, team_stats, scoring, tiers_df)
+
+    with tab_draft:
+        _draft_tab(draft_summary, draft_detail)
 
 
 main()
