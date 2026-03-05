@@ -1,0 +1,202 @@
+﻿adp,Name,Pos,Team,Overall,Std.,High,Low
+1,Christian McCaffrey,RB,SF,1.2,0.5,1.01,1.05
+2,Dalvin Cook,RB,FA,2.5,0.7,1.01,1.06
+3,Alvin Kamara,RB,NO,3.8,1,1.01,1.08
+4,Derrick Henry,RB,BAL,4,1.3,1.01,1.08
+5,Ezekiel Elliott,RB,FA,5.3,1.1,1.02,1.12
+6,Davante Adams,WR,LAR,6.4,1.6,1.01,1.12
+7,Aaron Jones Sr.,RB,MIN,7.5,1.7,1.04,2.01
+8,Travis Kelce,TE,KC,8.2,2.1,1.02,2.03
+9,Austin Ekeler,RB,WAS,8.5,2,1.02,2.04
+10,Nick Chubb,RB,HOU,9.9,2.2,1.05,2.06
+11,Tyreek Hill,WR,FA,10.6,2.2,1.01,2.04
+12,Saquon Barkley,RB,PHI,12,2.8,1.03,2.08
+13,Najee Harris,RB,LAC,12.9,2.5,1.02,2.07
+14,Stefon Diggs,WR,NE,13.5,2.4,1.05,2.09
+15,Jonathan Taylor,RB,IND,13.8,2.6,1.04,2.08
+16,Antonio Gibson,RB,FA,15.6,2.3,1.07,2.1
+17,DeAndre Hopkins,WR,BAL,17,2.3,1.07,2.11
+18,Calvin Ridley,WR,TEN,18,2.1,1.09,3.01
+19,Joe Mixon,RB,HOU,19.2,2.6,1.11,3.04
+20,DK Metcalf,WR,PIT,19.7,2.3,1.07,3.02
+21,Clyde Edwards-Helaire,RB,FA,20.4,2.3,2.01,3.06
+22,Darren Waller,TE,MIA,21.5,3.3,1.05,3.06
+23,Justin Jefferson,WR,MIN,22.4,1.9,2.01,3.04
+24,Patrick Mahomes,QB,KC,22.9,6.2,1.01,4.04
+25,A.J. Brown,WR,PHI,24.8,2.4,2.04,3.08
+26,David Montgomery,RB,HOU,25.9,3.4,2.02,3.12
+27,Keenan Allen,WR,LAC,25.9,2.6,2.04,3.12
+28,George Kittle,TE,SF,28.5,3.6,1.11,4.05
+29,James Robinson,RB,FA,29.1,3.3,1.12,4.05
+30,CeeDee Lamb,WR,DAL,29.6,2.8,2.05,4.03
+31,Terry McLaurin,WR,WAS,30.3,2.8,2.09,4.03
+32,Allen Robinson II,WR,FA,32.7,3.1,2.08,4.06
+33,D'Andre Swift,RB,CHI,34,4.1,1.08,5.02
+34,Josh Allen,QB,BUF,34.4,4.6,1.02,5.02
+35,Robert Woods,WR,FA,35.1,3.1,2.11,4.09
+36,Josh Jacobs,RB,GB,35.4,4.1,2.06,5.04
+37,Mike Evans,WR,TB,37.8,3.3,2.09,4.11
+38,Miles Sanders,RB,DAL,38.7,4.4,2.02,5.01
+39,Amari Cooper,WR,FA,40,3.5,3.02,5.02
+40,Kyle Pitts Sr.,TE,ATL,40.3,5.3,2.1,5.08
+41,Kyler Murray,QB,ARI,41.3,4.3,2.05,6.01
+42,Cooper Kupp,WR,SEA,41.3,3.4,3.09,5.06
+43,Mike Davis,RB,FA,43.1,5.2,3.05,6.06
+44,Darrell Henderson Jr.,RB,FA,43.8,4.9,3.05,6.01
+45,Diontae Johnson,WR,FA,44.9,4.3,2.12,6.01
+46,Myles Gaskin,RB,FA,45.7,4.8,2.12,5.09
+47,Julio Jones,WR,FA,46,4.6,3.05,6.08
+48,Chris Godwin Jr.,WR,TB,47.2,5,3.05,6.06
+49,Tyler Lockett,WR,LV,48.4,5.4,3.02,6.02
+50,Lamar Jackson,QB,BAL,50.9,6.7,1.08,7.09
+51,Adam Thielen,WR,FA,52.3,4.9,2.03,6.07
+52,Javonte Williams,RB,DAL,52.7,6.5,3.06,6.08
+53,Mark Andrews,TE,BAL,52.8,5.9,3.02,6.08
+54,Kareem Hunt,RB,KC,53.2,5.8,3.01,6.1
+55,Brandon Aiyuk,WR,SF,53.9,4.5,3.09,6.08
+56,T.J. Hockenson,TE,MIN,55.4,4.8,3.12,6.1
+57,Damien Harris,RB,FA,55.5,6.1,3.04,6.1
+58,Gus Edwards,RB,FA,56.6,8.7,2.01,8.03
+59,DJ Moore,WR,BUF,57,4.7,4.01,6.11
+60,Aaron Rodgers,QB,PIT,59,6.6,3.06,7.07
+61,Chase Edmonds,RB,WAS,60.4,6.2,3.1,7.04
+62,Chase Claypool,WR,FA,61.1,4.8,3.11,6.12
+63,Tee Higgins,WR,CIN,61.3,6.6,4.03,7.05
+64,Raheem Mostert,RB,LV,63,7.9,2.06,7.08
+65,Jerry Jeudy,WR,CLE,64.1,5.2,4.08,7.06
+66,Dak Prescott,QB,DAL,66.7,8.6,2.11,8.07
+67,Trey Sermon,RB,FA,67.7,5.9,4.05,8.01
+68,Odell Beckham Jr.,WR,FA,69,5.6,4.08,8.07
+69,Justin Herbert,QB,LAC,69.3,7.4,4.02,8.05
+70,Russell Wilson,QB,NYG,69.4,7,3.12,8.03
+71,Michael Thomas,WR,FA,69.5,5.9,4.05,7.11
+72,Logan Thomas,TE,FA,72.2,6.8,3.09,10.08
+73,Robbie Chosen,WR,FA,75,5.8,5.05,8.07
+74,Melvin Gordon III,RB,FA,75.2,6.6,4.1,8.1
+75,Ja'Marr Chase,WR,CIN,77.4,5.8,5.01,8.08
+76,DeVonta Smith,WR,PHI,77.6,6.2,4.09,8.12
+77,Tom Brady,QB,FA,77.8,7.9,5.03,9.08
+78,A.J. Dillon,RB,PHI,79.1,5.7,5.11,8.1
+79,Noah Fant,TE,CIN,79.2,7.8,5.04,9.04
+80,Ronald Jones,RB,FA,79.8,5.8,4.08,9.03
+81,JuJu Smith-Schuster,WR,KC,82.5,6.8,6.05,9.06
+82,Kenny Golladay,WR,FA,82.8,6.8,5.11,9.1
+83,Zack Moss,RB,FA,83.8,7.1,6.04,9.04
+84,Matthew Stafford,QB,LAR,85,10.7,3.07,10.03
+85,Courtland Sutton,WR,DEN,85.7,7.1,2.05,9.07
+86,Laviska Shenault Jr.,WR,FA,85.9,6.2,6.01,9.09
+87,Robert Tonyan,TE,KC,87.2,11.5,4.02,11.04
+88,Corey Davis,WR,FA,89.6,7.1,5.12,10.04
+89,Deebo Samuel Sr.,WR,WAS,89.8,6.9,5.04,9.12
+90,Leonard Fournette,RB,FA,90.1,7.3,6.02,10.05
+91,Marquez Callaway,WR,FA,90.5,8.9,5.07,10.1
+92,Devin Singletary,RB,NYG,91.2,9.2,6.01,9.1
+93,Jamaal Williams,RB,FA,92,7.5,5.11,10.11
+94,Sony Michel,RB,FA,93.4,9.9,4.1,10.11
+95,Dallas Goedert,TE,PHI,93.9,10.1,4.05,11.04
+96,Tyler Higbee,TE,LAR,95.8,9.7,5.12,11.09
+97,Ryan Tannehill,QB,FA,96.1,9.6,4.08,11.04
+98,James Conner,RB,ARI,96.2,8.2,6.12,10.09
+99,Tyler Boyd,WR,FA,97.3,8.6,5.12,10.07
+100,Jaylen Waddle,WR,MIA,99.2,7.8,5.04,10.11
+101,Mecole Hardman,WR,BUF,100,7,7.08,10.1
+102,Jalen Hurts,QB,PHI,100.2,10.2,4.11,11.07
+103,Tony Pollard,RB,TEN,102.7,7.4,6.06,10.12
+104,Brandin Cooks,WR,BUF,102.9,9.9,5.03,11.04
+105,Kenyan Drake,RB,FA,102.9,8.2,7.04,11.08
+106,Michael Pittman Jr.,WR,IND,104.4,8.1,7.06,10.12
+107,Alexander Mattison,RB,MIA,106.5,9.5,6.02,12.07
+108,Phillip Lindsay,RB,FA,107.5,7.1,7.02,11.1
+109,Pittsburgh Defense,DEF,PIT,108.5,10.6,3.06,12.04
+110,LA Rams Defense,DEF,LAR,108.6,12,5.07,11.12
+111,Darnell Mooney,WR,ATL,109,7,7.12,11.09
+112,Joe Burrow,QB,CIN,112.4,8.7,7.02,11.11
+113,DJ Chark,WR,FA,112.8,7.9,7.09,11.1
+114,Mike Gesicki,TE,CIN,114.3,16.4,5.07,14.06
+115,Tampa Bay Defense,DEF,TB,115,9.2,4.05,13.01
+116,David Johnson,RB,FA,115,9.6,8.09,12.12
+117,Jakobi Meyers,WR,JAX,116.2,9.9,6.12,12.06
+118,Mike Williams,WR,FA,116.2,7.7,6.12,13.06
+119,J.D. McKissic,RB,FA,116.8,10.4,7.02,13.03
+120,Jarvis Landry,WR,FA,118.2,9,6.11,13.05
+121,Trey Lance,QB,LAC,118.2,9.8,6.08,13.03
+122,Irv Smith Jr.,TE,FA,120.3,16.2,7.07,15.04
+123,Nyheim Hines,RB,FA,120.6,11.9,4.11,13.06
+124,Giovani Bernard,RB,FA,120.9,10.3,5.11,13.03
+125,Rhamondre Stevenson,RB,NE,121.3,12.2,6.09,13.06
+126,Washington Defense,DEF,WAS,123.1,10.6,6.09,13.03
+127,Justin Fields,QB,NYJ,125.6,12,7.04,14.05
+128,Marvin Jones Jr.,WR,FA,126,11.6,8.05,13.06
+129,Chuba Hubbard,RB,CAR,127.6,10.5,8.09,13.1
+130,Baltimore Defense,DEF,BAL,129.7,10.2,7.1,13.11
+131,Matt Ryan,QB,FA,129.8,14.2,8.03,13.04
+132,Latavius Murray,RB,FA,130.6,14,7.1,13.11
+133,Jonnu Smith,TE,FA,130.7,15.6,7.03,15.09
+134,Elijah Moore,WR,FA,132.6,10,9.07,14.03
+135,Russell Gage Jr.,WR,FA,133.8,10.4,8.06,13.08
+136,Baker Mayfield,QB,TB,134.3,13.7,8.02,15.04
+137,Justin Tucker,PK,FA,135.4,16.8,5.01,14.1
+138,Michael Gallup,WR,FA,135.4,11,9.08,13.12
+139,Jameis Winston,QB,NYG,137.3,11.8,8.06,14.11
+140,Indianapolis Defense,DEF,IND,137.5,12.8,8.09,14.12
+141,Rashaad Penny,RB,FA,137.9,12,9.05,15.05
+142,San Francisco Defense,DEF,SF,137.9,11.9,3.09,15.03
+143,Harrison Butker,PK,KC,138.7,17.7,6.05,14.07
+144,Tevin Coleman,RB,FA,139,17.2,4.04,15.05
+145,Younghoe Koo,PK,FA,139.6,16,6.08,15.07
+146,Curtis Samuel,WR,BUF,140.2,12.9,9.04,15.02
+147,Greg Zuerlein,PK,FA,140.6,12,9.11,15.12
+148,Marquise Brown,WR,KC,140.9,14.9,7.09,15.03
+149,Jason Sanders,PK,MIA,143.9,15.4,10.02,16.05
+150,Gabe Davis,WR,BUF,144.3,24.2,9.04,16.01
+151,Trevor Lawrence,QB,JAX,144.7,14.7,7.12,15.1
+152,Damien Williams,RB,FA,146,23.8,9.12,16.1
+153,Rondale Moore,WR,FA,146.4,16.1,7.09,15.09
+154,Ryan Succop,PK,FA,146.5,16.5,10.02,16.08
+155,Bryan Edwards,WR,FA,148.2,20.3,6.1,15.09
+156,Rodrigo Blankenship,PK,FA,148.5,14.8,10.01,16.01
+157,New England Defense,DEF,NE,148.8,12.2,9.12,15.06
+158,Terrace Marshall Jr.,WR,MIA,149,16.4,7.07,15.11
+159,Zach Wilson,QB,MIA,149.1,24.8,8.09,17.04
+160,Hunter Henry,TE,NE,149.7,22.3,7.12,16.09
+161,Cleveland Defense,DEF,CLE,150,12.4,10.04,15.09
+162,Tyler Bass,PK,BUF,150.2,13.8,10.02,16.01
+163,Darrel Williams,RB,FA,150.3,15.6,10.04,16.04
+164,Evan Engram,TE,DEN,150.9,24.2,6.06,17.08
+165,Cole Beasley,WR,FA,150.9,16.4,9.05,16.02
+166,Adam Trautman,TE,DEN,151.9,20.2,6.12,17.02
+167,Mark Ingram II,RB,FA,154.2,17.2,7.12,15.12
+168,Justin Jackson,RB,FA,154.6,26.7,10.05,17.05
+169,Kenneth Gainwell,RB,PIT,154.8,14,9.08,16.04
+170,Matt Prater,PK,BUF,154.9,15,7.01,16.06
+171,Buffalo Defense,DEF,BUF,155.3,13,10.02,16.08
+172,A.J. Green,WR,FA,156.6,20.9,6.11,16.09
+173,Gerald Everett,TE,FA,156.6,18.5,9.12,17.09
+174,Zach Ertz,TE,WAS,157.1,28.8,7.04,18.06
+175,Pat Freiermuth,TE,PIT,157.3,23.8,7.12,18.06
+176,Mac Jones,QB,SF,157.4,24.5,10.07,18.05
+177,Miami Defense,DEF,MIA,158.2,21.4,10.1,18.04
+178,Amon-Ra St. Brown,WR,DET,158.5,14.7,9.02,17.1
+179,Tony Jones,RB,FA,158.8,17.6,10.04,15.12
+180,Marlon Mack,RB,FA,158.8,16.4,10.07,17.02
+181,Mason Crosby,PK,FA,159.2,13.7,12.07,17.03
+182,Randall Cobb,WR,FA,159.7,18.2,9.04,16.04
+183,Jerick McKinnon,RB,FA,159.7,21.7,6.03,18.05
+184,Denver Defense,DEF,DEN,159.8,13.8,9.1,16.11
+185,Tua Tagovailoa,QB,MIA,160.6,20,8.03,15.12
+186,Kirk Cousins,QB,ATL,160.9,17.8,3.07,17.08
+187,Malcolm Brown,RB,FA,161.7,16.1,11.06,17.01
+188,DeVante Parker,WR,FA,162.3,14,10.06,15.12
+189,Deshaun Watson,QB,CLE,163.6,15.9,10.12,16.11
+190,Matt Gay,PK,FA,163.8,12.3,10.1,15.11
+191,Robbie Gould,PK,FA,165.1,14.1,10.1,18.04
+192,Carson Wentz,QB,MIN,167.1,11.8,11.04,17.08
+193,Wil Lutz,PK,DEN,168,19.1,12.05,18.03
+194,Nelson Agholor,WR,FA,170.7,25.1,10.02,18.05
+195,Marquez Valdes-Scantling,WR,PIT,170.9,23.5,9.08,18.05
+196,Kansas City Defense,DEF,KC,173.2,25.7,10.12,18.05
+197,Daniel Carlson,PK,LV,173.7,18,10.12,18.02
+198,Jason Myers,PK,SEA,174,14.7,12.06,18.04
+201,Graham Gano,PK,NYG,167.1,16.1,12.04,19.02
+202,Chase Claypool,WR,FA,169.1,10,12.09,15.12
+205,Matt Prater,PK,BUF,193.5,13,15.01,18.02
