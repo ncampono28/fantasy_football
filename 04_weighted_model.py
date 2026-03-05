@@ -106,6 +106,218 @@ def calc_fpts(proj, fmt, position):
     return safe_round(pts, 1)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TEAM PASSING BUDGET — QB Age-Adjusted Receiving Volume
+# Scales each team's projected receiving totals so they match a QB-age-
+# adjusted passing budget derived from 2025 actual team passing yards.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# QB passing output curve: peak at 28-29 = 1.0, anchors at 38 = 0.62, 39 = 0.54
+QB_AGE_FACTORS = {
+    22: 0.78, 23: 0.83, 24: 0.88, 25: 0.92, 26: 0.96, 27: 0.99,
+    28: 1.00, 29: 1.00,
+    30: 0.99, 31: 0.97, 32: 0.94, 33: 0.91, 34: 0.87,
+    35: 0.82, 36: 0.77, 37: 0.70, 38: 0.62, 39: 0.54,
+    40: 0.46,
+}
+
+# Projected 2026 starting QB per team + their age at start of 2026 season.
+# age_2025 is derived as age_2026 - 1 (same QB aging one year).
+# Update this dict each offseason when rosters are known.
+TEAM_QB_2026 = {
+    "ARI": ("Kyler Murray",        29),  # returning from 2025 injury
+    "ATL": ("Michael Penix Jr",    26),  # took over mid-2024
+    "BAL": ("Lamar Jackson",       30),
+    "BUF": ("Josh Allen",          30),
+    "CAR": ("Bryce Young",         25),
+    "CHI": ("Caleb Williams",      25),
+    "CIN": ("Joe Burrow",          30),
+    "CLE": ("Shedeur Sanders",     24),  # 2025 draft pick
+    "DAL": ("Dak Prescott",        33),
+    "DEN": ("Bo Nix",              27),
+    "DET": ("Jared Goff",          32),
+    "GB":  ("Jordan Love",         28),
+    "HOU": ("C.J. Stroud",         25),
+    "IND": ("Anthony Richardson",  24),
+    "JAX": ("Trevor Lawrence",     27),
+    "KC":  ("Patrick Mahomes",     31),
+    "LA":  ("Matthew Stafford",    38),
+    "LAC": ("Justin Herbert",      29),
+    "LV":  ("Aidan O'Connell",     27),
+    "MIA": ("Tua Tagovailoa",      28),
+    "MIN": ("J.J. McCarthy",       23),
+    "NE":  ("Drake Maye",          24),
+    "NO":  ("Derek Carr",          36),
+    "NYG": ("Jaxson Dart",         24),
+    "NYJ": ("Justin Fields",       27),
+    "PHI": ("Jalen Hurts",         28),
+    "PIT": ("Russell Wilson",      38),
+    "SF":  ("Brock Purdy",         27),
+    "SEA": ("Geno Smith",          36),
+    "TB":  ("Baker Mayfield",      31),
+    "TEN": ("Cam Ward",            24),  # 2025 draft pick
+    "WAS": ("Jayden Daniels",      26),
+}
+
+BUDGET_MIN = 2_800   # floor: even bad offenses throw ~2,800 yds to skill players
+BUDGET_MAX = 4_800   # ceiling: historically no team has exceeded this
+
+
+def _qb_age_factor(age):
+    """Interpolate QB age factor; clamp to defined boundaries."""
+    if age in QB_AGE_FACTORS:
+        return QB_AGE_FACTORS[age]
+    if age < min(QB_AGE_FACTORS):
+        return QB_AGE_FACTORS[min(QB_AGE_FACTORS)]
+    return QB_AGE_FACTORS[max(QB_AGE_FACTORS)]
+
+
+def apply_team_budget(proj_df, seasonal):
+    """
+    Adjust receiving volume (yards, targets, receptions) for every skill-
+    position player so each team's projected receiving total matches a
+    QB-age-adjusted passing budget.
+
+    Steps
+    -----
+    1. Compute 2025 team passing yards from seasonal QB stats.
+    2. Apply QB age-factor ratio (factor_age26 / factor_age25) to derive budget.
+    3. Clamp budget to [BUDGET_MIN, BUDGET_MAX].
+    4. Compute current projected team receiving yards from proj_df.
+    5. Scale receiving_yards, targets, receptions by (budget / current).
+       Cap scaling factor to ±30 % to prevent over-correction.
+    6. Keep TD rates and all other efficiency metrics unchanged.
+    7. Recalculate all four fpts columns for scaled players (vectorized).
+    8. Print before/after table + top 3 most-affected players per team.
+    """
+    print(f"\n{'─' * 60}")
+    print("  Team Passing Budget — QB Age Adjustment")
+    print(f"{'─' * 60}")
+
+    # ── Step 1: 2025 team passing yards ──────────────────────────────────────
+    qb_2025 = seasonal[
+        (seasonal["season"] == BASE_SEASON) & (seasonal["position"] == "QB")
+    ]
+    team_pass_yds_2025 = qb_2025.groupby("team")["passing_yards"].sum()
+
+    # ── Steps 2 & 3: Budget per team ─────────────────────────────────────────
+    budgets = {}
+    for team, (qb_name, age_26) in TEAM_QB_2026.items():
+        age_25   = age_26 - 1
+        f26      = _qb_age_factor(age_26)
+        f25      = _qb_age_factor(age_25)
+        ratio    = f26 / f25 if f25 > 0 else 1.0
+        base_yds = float(team_pass_yds_2025.get(team, 3_500))
+        budget   = int(np.clip(round(base_yds * ratio), BUDGET_MIN, BUDGET_MAX))
+        budgets[team] = dict(
+            qb_name=qb_name, age_26=age_26, age_25=age_25,
+            f26=round(f26, 3), f25=round(f25, 3), ratio=round(ratio, 4),
+            pass_yds_25=int(base_yds), budget=budget,
+        )
+
+    # ── Steps 4 & 5: Scale volume columns ───────────────────────────────────
+    SKILL      = {"WR", "TE", "RB"}
+    SCALE_COLS = ["receiving_yards", "targets", "receptions"]
+
+    before_df = proj_df.copy()  # snapshot for reporting
+
+    for team, info in budgets.items():
+        budget = info["budget"]
+        for scenario in ("bear", "base", "bull"):
+            mask = (
+                proj_df["team"].eq(team) &
+                proj_df["position"].isin(SKILL) &
+                proj_df["scenario"].eq(scenario)
+            )
+            current = proj_df.loc[mask, "receiving_yards"].sum()
+            if current <= 0:
+                info[f"sf_{scenario}"] = 1.0
+                continue
+            sf = float(np.clip(budget / current, 0.70, 1.30))
+            info[f"sf_{scenario}"] = round(sf, 4)
+            for col in SCALE_COLS:
+                proj_df.loc[mask, col] = (proj_df.loc[mask, col] * sf).round(0)
+
+    # ── Steps 6 & 7: Recalculate fpts (vectorized over all skill rows) ───────
+    sk = proj_df["position"].isin(SKILL)
+    for fmt, s in SCORING.items():
+        te_bonus = np.where(proj_df.loc[sk, "position"] == "TE", s["te_bonus"], 0.0)
+        proj_df.loc[sk, f"fpts_{fmt}"] = (
+            proj_df.loc[sk, "passing_yards"]   * s["pass_yd"] +
+            proj_df.loc[sk, "passing_tds"]     * s["pass_td"] +
+            proj_df.loc[sk, "interceptions"]   * s["int"]     +
+            proj_df.loc[sk, "rushing_yards"]   * s["rush_yd"] +
+            proj_df.loc[sk, "rushing_tds"]     * s["rush_td"] +
+            proj_df.loc[sk, "receptions"]      * (s["rec"] + te_bonus) +
+            proj_df.loc[sk, "receiving_yards"] * s["rec_yd"]  +
+            proj_df.loc[sk, "receiving_tds"]   * s["rec_td"]
+        ).round(1)
+
+    # ── Step 8a: Before/after team totals table ───────────────────────────────
+    base_mask = proj_df["scenario"].eq("base") & proj_df["position"].isin(SKILL)
+
+    before_team = (
+        before_df[base_mask].groupby("team")["receiving_yards"].sum().rename("before")
+    )
+    after_team = (
+        proj_df[base_mask].groupby("team")["receiving_yards"].sum().rename("after")
+    )
+    tbl = pd.concat([before_team, after_team], axis=1)
+    tbl["budget"]  = tbl.index.map(lambda t: budgets.get(t, {}).get("budget", 0))
+    tbl["sf"]      = tbl.index.map(lambda t: budgets.get(t, {}).get("sf_base", 1.0))
+    tbl["qb"]      = tbl.index.map(lambda t: budgets.get(t, {}).get("qb_name", "?"))
+    tbl["age"]     = tbl.index.map(lambda t: budgets.get(t, {}).get("age_26", 0))
+    tbl["delta"]   = (tbl["after"] - tbl["before"]).round(0)
+
+    hdr = f"  {'Team':<5} {'QB':<22} {'Age':>3}  {'SF':>5}  {'Budget':>6}  {'Before':>6}  {'After':>6}  {'Delta':>6}"
+    print(f"\n{hdr}")
+    print(f"  {'─'*4} {'─'*21} {'─'*3}  {'─'*5}  {'─'*6}  {'─'*6}  {'─'*6}  {'─'*6}")
+    for team, row in tbl.sort_values("delta").iterrows():
+        sf_str = f"{row['sf']:.3f}" if pd.notna(row.get("sf")) else "  —  "
+        print(
+            f"  {team:<5} {str(row['qb']):<22} {int(row['age']):>3}  "
+            f"{sf_str}  {int(row['budget']):>6}  {int(row['before']):>6}  "
+            f"{int(row['after']):>6}  {int(row['delta']):>+6}"
+        )
+
+    # ── Step 8b: Top 3 most-affected players per team ────────────────────────
+    print(f"\n  Top 3 most-affected players per team (base scenario, |delta fpts_ppr|):")
+
+    before_pts = (
+        before_df[before_df["scenario"].eq("base")]
+        [["player_id", "fpts_ppr"]]
+        .rename(columns={"fpts_ppr": "fpts_before"})
+    )
+    after_pts = (
+        proj_df[proj_df["scenario"].eq("base")]
+        [["player_id", "team", "player_name", "position", "fpts_ppr"]]
+        .rename(columns={"fpts_ppr": "fpts_after"})
+    )
+    diff = after_pts.merge(before_pts, on="player_id")
+    diff["delta_pts"] = (diff["fpts_after"] - diff["fpts_before"]).round(1)
+    diff["abs_delta"]  = diff["delta_pts"].abs()
+
+    for team in sorted(diff["team"].unique()):
+        top = (
+            diff[(diff["team"] == team) & (diff["abs_delta"] >= 0.5)]
+            .sort_values("abs_delta", ascending=False)
+            .head(3)
+        )
+        if top.empty:
+            continue
+        print(f"\n  {team}  ({budgets.get(team, {}).get('qb_name', '?')}, age {budgets.get(team, {}).get('age_26', '?')}):")
+        for _, p in top.iterrows():
+            sign = "+" if p["delta_pts"] >= 0 else ""
+            print(
+                f"    {p['player_name']:<24} {p['position']}  "
+                f"{p['fpts_before']:.1f} -> {p['fpts_after']:.1f}  "
+                f"({sign}{p['delta_pts']:.1f})"
+            )
+
+    print(f"\n  Team budget scaling complete. {len(budgets)} teams processed.")
+    return proj_df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────────────────────────────────────
 print("=" * 60)
@@ -538,6 +750,7 @@ n_returners = len({p["player_id"] for p in all_projections if p.get("returning_f
 print(f"\n  {n_returners} players rebuilt as injured returners")
 
 proj_df = pd.DataFrame(all_projections)
+proj_df = apply_team_budget(proj_df, seasonal)
 proj_df.to_csv(DATA / "projections_weighted.csv", index=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
