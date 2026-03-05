@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import altair as alt
@@ -84,25 +83,6 @@ def _f(val):
         return 0.0 if np.isnan(v) else v
     except (TypeError, ValueError):
         return 0.0
-
-
-def _switch_to_projections_tab():
-    """Inject JS to auto-click the Projections tab (works via window.parent DOM)."""
-    components.html(
-        """<script>
-        setTimeout(function() {
-            var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
-            for (var i = 0; i < tabs.length; i++) {
-                if (tabs[i].innerText.indexOf("Projections") !== -1) {
-                    tabs[i].click();
-                    break;
-                }
-            }
-        }, 300);
-        </script>""",
-        height=0,
-        width=0,
-    )
 
 
 # ── ADP Tab ───────────────────────────────────────────────────────────────────
@@ -243,9 +223,6 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             return "background-color:rgba(200,50,50,0.10)"
         return ""
 
-    # Reset index so row indices are 0-based for reliable click detection
-    table = table.reset_index(drop=True)
-
     # Normalize Python None in object columns so they render as "—" not "None"
     for _col in table.select_dtypes(include="object").columns:
         table[_col] = table[_col].where(table[_col].notna(), other=None)
@@ -269,22 +246,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
             styler = styler.applymap(_tier_pct_color, subset=[tier_col])
 
     st.subheader(f"Current Rankings — {len(df)} players shown")
-    st.caption("Click any player row to jump to their projection →", help="Selects the player in the sidebar and switches to the Projections tab.")
-    event = st.dataframe(
-        styler,
-        use_container_width=True,
-        hide_index=True,
-        height=440,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
-    # Handle row click → navigate to Projections tab
-    if event.selection.rows:
-        row_idx = event.selection.rows[0]
-        clicked_player = table.iloc[row_idx]["Player"]
-        st.session_state["adp_navigate_player"] = clicked_player
-        st.rerun()
-
+    st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
     st.caption(
         f"Best Ball ADP = Underdog March 4 draft position (lower is better)  ·  "
         f"Value Score = positional ADP rank − model positional rank (positive = undervalued at position)  ·  "
@@ -712,9 +674,6 @@ def main():
             .sort_values("player_name")
         )
 
-    # Remove entries where player_name looks like a raw player_id (e.g. "00-0037091")
-    idx = idx[~idx["player_name"].str.match(r"^\d{2}-\d{7}", na=False)]
-
     # ── Sidebar ──────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("## 🏈 FF Projections")
@@ -733,24 +692,10 @@ def main():
             filtered_idx = filtered_idx[filtered_idx["team"] == team_filter]
         name_opts = filtered_idx["player_name"].tolist()
 
-        # Handle navigation request from ADP table row click
-        if "adp_navigate_player" in st.session_state:
-            target = st.session_state.pop("adp_navigate_player")
-            if target in name_opts:
-                st.session_state["proj_player"] = target
-                st.session_state["_switch_tab"] = True
-
-        selected = st.selectbox(
-            "Player", name_opts if name_opts else ["(no players)"],
-            key="proj_player",
-        )
+        selected = st.selectbox("Player", name_opts if name_opts else ["(no players)"])
 
         st.divider()
         scoring = st.radio("Scoring Format", SCORING_FORMATS)
-
-    # ── Inject tab-switch JS if navigating from ADP table ────────────────────
-    if st.session_state.pop("_switch_tab", False):
-        _switch_to_projections_tab()
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_adp, tab_proj = st.tabs(["📈 ADP & Market", "📊 Projections"])
