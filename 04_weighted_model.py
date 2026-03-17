@@ -105,6 +105,44 @@ def calc_fpts(proj, fmt, position):
     pts += proj.get("receiving_tds", 0)   * s["rec_td"]
     return safe_round(pts, 1)
 
+
+def calc_fpts_pg(row):
+    """Half-PPR per-game scorer for the variance-based wide QA DataFrame.
+
+    player_variance.csv omits rushing stats for QBs and receiving stats for RBs.
+    Falls back to weekly supplement columns (wk_*) when variance columns are zero.
+    """
+    pos = str(row.get("position", ""))
+
+    # Passing
+    pts = row.get("passing_yards", 0) * 0.04 + row.get("passing_tds", 0) * 4
+
+    # Rushing — variance has NO rushing data for QBs; use weekly supplement
+    rush_yds = row.get("rushing_yards", 0)
+    rush_tds = row.get("rushing_tds", 0)
+    if pos == "QB" and rush_yds == 0:
+        rush_yds = row.get("wk_rushing_yards", 0) or 0
+        rush_tds = row.get("wk_rushing_tds", 0) or 0
+    pts += rush_yds * 0.1 + rush_tds * 6
+
+    # Receiving — variance has NO receiving_yards for RBs; use weekly supplement
+    recv_yds = row.get("receiving_yards", 0)
+    recv_tds = row.get("receiving_tds", 0)
+    if recv_yds == 0:
+        recv_yds = row.get("wk_receiving_yards", 0) or 0
+        recv_tds = row.get("wk_receiving_tds", 0) or 0
+    pts += recv_yds * 0.1 + recv_tds * 6
+
+    # Half-PPR receptions via targets × catch rate
+    tgts = row.get("targets", 0)
+    if tgts == 0:
+        tgts = row.get("wk_targets", 0) or 0
+    catch = {"WR": 0.72, "TE": 0.72, "RB": 0.82, "QB": 0}
+    pts += tgts * catch.get(pos, 0.72) * 0.5
+
+    return round(pts, 2)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TEAM PASSING BUDGET — QB Age-Adjusted Receiving Volume
 # Scales each team's projected receiving totals so they match a QB-age-
@@ -324,10 +362,24 @@ print("=" * 60)
 print("  Weighted Projection Model  ")
 print("=" * 60)
 
-seasonal  = pd.read_csv(DATA / "player_seasonal_stats.csv")
-players   = pd.read_csv(DATA / "player_metadata.csv")
-variance  = pd.read_csv(DATA / "player_variance.csv")
+seasonal   = pd.read_csv(DATA / "player_seasonal_stats.csv")
+players    = pd.read_csv(DATA / "player_metadata.csv")
+variance   = pd.read_csv(DATA / "player_variance.csv")
 team_stats = pd.read_csv(DATA / "team_season_stats.csv")
+weekly     = pd.read_csv(DATA / "player_weekly_stats.csv")
+
+# ── Supplemental per-game medians from weekly data ───────────────────────────
+# Provides rushing stats for QBs and receiving stats for RBs that are absent
+# from player_variance.csv (which only stores positional metric subsets).
+_stat_cols = ["rushing_yards", "rushing_tds", "receiving_yards", "receiving_tds",
+              "targets", "carries"]
+supplement = (
+    weekly
+    .groupby(["player_name", "position", "season"])[_stat_cols]
+    .median()
+    .reset_index()
+    .rename(columns={c: f"wk_{c}" for c in _stat_cols})
+)
 
 # Calculate player ages for 2026 projection year
 players["birth_date"] = pd.to_datetime(players["birth_date"], errors="coerce")
@@ -544,17 +596,28 @@ for _, player in latest.iterrows():
 
             w_rec = weighted_avg(pid, "receptions", seasonal)
             w_rec_yds = weighted_avg(pid, "receiving_yards", seasonal)
+            w_rec_tds = weighted_avg(pid, "receiving_tds", seasonal)
             catch_rate = (w_rec / w_tgts) if w_tgts else 0.75
             ypr = (w_rec_yds / w_rec) if w_rec else 7.0
+            # TD rate per reception — varies meaningfully for receiving backs
+            # (CMC/Ekeler ~0.06, pure rushers ~0.02); bear/bull flows through receptions
+            td_per_rec = (w_rec_tds / w_rec) if (w_rec and not np.isnan(w_rec_tds or np.nan)) else 0.03
+
+            # Bear/bull receiving yards from variance; fall back to efficiency-derived
+            rec_yd_p = get_pct("receiving_yards", pct_col)
+            rec_yd_pg = rec_yd_p if not np.isnan(rec_yd_p) else tgt_pg * catch_rate * ypr
+            rec_yd_pg = rec_yd_pg * age_mult
+
+            season_rec = tgt_pg * GAMES * catch_rate
 
             proj = {
                 "carries": safe_round(carries_pg * GAMES),
                 "rushing_yards": safe_round(carries_pg * GAMES * ypc),
                 "rushing_tds": safe_round(carries_pg * GAMES * td_per_carry, 1),
                 "targets": safe_round(tgt_pg * GAMES),
-                "receptions": safe_round(tgt_pg * GAMES * catch_rate),
-                "receiving_yards": safe_round(tgt_pg * GAMES * catch_rate * ypr),
-                "receiving_tds": safe_round(tgt_pg * GAMES * 0.03, 1),
+                "receptions": safe_round(season_rec),
+                "receiving_yards": safe_round(rec_yd_pg * GAMES),
+                "receiving_tds": safe_round(season_rec * td_per_rec * age_mult, 1),
                 "passing_yards": 0, "passing_tds": 0, "interceptions": 0,
             }
 
@@ -790,3 +853,69 @@ Next steps:
   → Run 05_vegas_totals.py   to add game total adjustments
   → Tell Claude Code to update app.py to use projections_weighted.csv
 """)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCORING QA — validate calc_fpts_pg against known historical seasons
+# Builds a wide variance DataFrame (one row per player/season) merged with the
+# weekly supplement so QB rushing and RB receiving fall back correctly.
+# ─────────────────────────────────────────────────────────────────────────────
+_SUPP_COLS = ["wk_rushing_yards", "wk_rushing_tds", "wk_receiving_yards",
+              "wk_receiving_tds", "wk_targets", "wk_carries"]
+
+wide_chunks = []
+for _season in [2021, 2022, 2023, 2024, 2025]:
+    _v = variance[variance["season"] == _season]
+    if _v.empty:
+        continue
+    _wide = (
+        _v.pivot_table(
+            index=["player_id", "player_name", "position", "season"],
+            columns="metric",
+            values="median",
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+    _wide.columns.name = None
+
+    if _season <= 2024:
+        _supp_s = supplement[supplement["season"] == _season]
+        _wide = _wide.merge(
+            _supp_s[["player_name", "position"] + _SUPP_COLS],
+            on=["player_name", "position"],
+            how="left",
+        )
+        for _c in _SUPP_COLS:
+            _wide[_c] = _wide[_c].fillna(0)
+    else:
+        for _c in _SUPP_COLS:
+            _wide[_c] = 0
+
+    wide_chunks.append(_wide)
+
+wide_check = pd.concat(wide_chunks, ignore_index=True)
+# Pivot leaves absent metrics as NaN — fill so calc_fpts_pg arithmetic works
+_id_cols = {"player_id", "player_name", "position", "season"} | set(_SUPP_COLS)
+_metric_cols = [c for c in wide_check.columns if c not in _id_cols]
+wide_check[_metric_cols] = wide_check[_metric_cols].fillna(0)
+wide_check["fpts_pg"] = wide_check.apply(calc_fpts_pg, axis=1)
+
+print("=== SCORING QA ===")
+_qa_checks = [
+    ("Jalen Hurts",          "QB", 2022, 25, 30),
+    ("Josh Allen",           "QB", 2024, 18, 24),
+    ("Lamar Jackson",        "QB", 2023, 15, 20),
+    ("Austin Ekeler",        "RB", 2021, 16, 22),
+    ("Christian McCaffrey",  "RB", 2023, 18, 22),
+]
+for _name, _pos, _season, _lo, _hi in _qa_checks:
+    _row = wide_check[
+        (wide_check["player_name"] == _name) &
+        (wide_check["season"] == _season)
+    ]
+    if len(_row):
+        _pts = _row.iloc[0]["fpts_pg"]
+        _status = "OK" if _lo <= _pts <= _hi else "OUT OF RANGE"
+        print(f"  [{_status}] {_name} {_season}: {_pts:.1f} pts/gm  (expected {_lo}-{_hi})")
+    else:
+        print(f"  [MISSING] {_name} {_season}: no data")

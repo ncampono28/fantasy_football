@@ -125,7 +125,7 @@ print("\n[4/5] Computing player variance...")
 
 VARIANCE_METRICS = {
     "QB": ["attempts", "passing_yards", "passing_tds"],
-    "RB": ["carries", "rushing_yards", "rushing_tds", "targets"],
+    "RB": ["carries", "rushing_yards", "rushing_tds", "targets", "receptions", "receiving_yards", "receiving_tds"],
     "WR": ["targets", "receiving_yards", "receiving_tds", "target_share"],
     "TE": ["targets", "receiving_yards", "receiving_tds", "target_share"],
 }

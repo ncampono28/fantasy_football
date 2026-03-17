@@ -1,277 +1,195 @@
 """
-Historical Draft Analysis
-=========================
-Reads local half-PPR draft CSV files from data/ (2020-2025).
-Merges with actual seasonal results and classifies each player as
-Steal / Hit / Reach / Bust.  Also computes VORP (points above the
-positional replacement level in a 12-team league).
+Draft VORP Analysis
+====================
+Reads preseason ADP CSVs (fantasy_draft_history/) and player_variance.csv,
+calculates per-game VORP for every drafted player across 2021-2025, and
+outputs two CSVs consumed by the Draft Intelligence page in app.py:
 
-Column normalisation:
-  2020-2024:  Name / Pos / Overall / Std.
-  2025:       Name / Position / Overall / Std. Dev
-
-Output:
-  data/draft_analysis.csv
-  data/draft_analysis_summary.csv
+  data/draft_vorp_full.csv     — one row per player per season, with ADP + actuals
+  data/draft_vorp_summary.csv  — aggregated VORP by position x round x season
 
 Run:
     py 07_draft_analysis.py
+
+Requires fantasy_draft_history/ folder at project root with:
+    ff_draft_2021_halfppr.csv  (columns: Name, Pos, Overall, ...)
+    ff_draft_2022_halfppr.csv
+    ff_draft_2023_halfppr.csv
+    ff_draft_2024_halfppr.csv
+    ff_draft_2025_halfppr.csv  (columns: Name, Position, Overall, ...)
 """
 
-import sys
-import re
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+DATA = Path("data")
+DRAFT_DIR = Path("fantasy_draft_history")
 
-DATA  = Path("data")
-YEARS = [2020, 2021, 2022, 2023, 2024, 2025]
+SEASONS = [2021, 2022, 2023, 2024, 2025]
+POSITIONS = ["QB", "RB", "WR", "TE"]
 
-# Value-score thresholds (pick-based, 12 picks/round)
-STEAL_MIN = 36    # outperformed draft cost by 3+ rounds
-BUST_MAX  = -36   # underperformed by 3+ rounds
+# Replacement level thresholds (12-team league)
+REPLACEMENT = {"QB": 13, "RB": 25, "WR": 25, "TE": 13}
 
-# Positional replacement rank for VORP (12-team, standard roster)
-#   QB: 1 starter  → QB13
-#   RB: 2 starters + flex share → RB25
-#   WR: 3 starters (incl. flex) → WR37
-#   TE: 1 starter  → TE13
-REPLACEMENT_RANK = {"QB": 13, "RB": 25, "WR": 37, "TE": 13}
-# Use 4-player window around each threshold to smooth replacement fpts
-REP_WINDOW = 4
-
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD ADP DATA
+# ─────────────────────────────────────────────────────────────────────────────
 print("=" * 60)
-print("  Historical Draft Analysis  2020-2025")
+print("  Draft VORP Analysis")
 print("=" * 60)
 
-
-# ─── Name normalisation ────────────────────────────────────────────────────────
-_SUFFIX_RE = re.compile(r"\b(jr\.?|sr\.?|ii|iii|iv|v)\b", re.IGNORECASE)
-
-def _norm(name: str) -> str:
-    name = _SUFFIX_RE.sub("", str(name))
-    return re.sub(r"\s+", " ", name).strip().lower()
-
-
-# ─── Load one season's draft CSV ──────────────────────────────────────────────
-def load_draft_csv(year: int) -> pd.DataFrame:
-    """Read a local half-PPR draft CSV and return a normalised DataFrame."""
-    path = DATA / f"ff_draft_{year}_halfppr.csv"
+adp_frames = []
+for season in SEASONS:
+    path = DRAFT_DIR / f"ff_draft_{season}_halfppr.csv"
     if not path.exists():
-        print(f"  ! {year}: file not found — {path}")
-        return pd.DataFrame()
-
-    # utf-8-sig strips the BOM present in 2020-2024 files
-    df = pd.read_csv(path, encoding="utf-8-sig")
-
-    if year <= 2024:
-        # Columns: #, Name, Pos, Team, Overall, Std., High, Low
-        df = df.rename(columns={
-            "Name":    "player_name_raw",
-            "Pos":     "position",
-            "Overall": "adp",
-            "Std.":    "adp_stdev",
-        })
-    else:
-        # 2025 columns: ADP, Overall, Name, Position, Team, Times Drafted,
-        #               Std. Dev, High, Low, Bye
-        df = df.rename(columns={
-            "Name":      "player_name_raw",
-            "Position":  "position",
-            "Overall":   "adp",
-            "Std. Dev":  "adp_stdev",
-        })
-
-    df = df[["player_name_raw", "position", "adp", "adp_stdev"]].copy()
-    df["adp"]      = pd.to_numeric(df["adp"],      errors="coerce")
-    df["adp_stdev"]= pd.to_numeric(df["adp_stdev"],errors="coerce").fillna(0)
-    df = df.dropna(subset=["adp"])
-    df["position"]  = df["position"].str.upper().str.strip()
-    df["season"]    = year
-    df["adp_rank"]  = df["adp"].round().astype(int)
-    df["name_key"]  = df["player_name_raw"].apply(_norm)
-
-    print(f"  + {year}: {len(df):4d} entries from {path.name}")
-    return df
-
-
-# ─── Load seasonal stats ──────────────────────────────────────────────────────
-print("\n  Loading player_seasonal_stats.csv ...")
-stats = pd.read_csv(DATA / "player_seasonal_stats.csv")
-stats = stats[stats["season"].isin(YEARS)].copy()
-stats["name_key"] = stats["player_name"].apply(_norm)
-
-# Overall PPR rank within each season
-stats["actual_rank"] = (
-    stats.groupby("season")["fantasy_points_ppr"]
-    .rank(ascending=False, method="min")
-    .astype(int)
-)
-print(f"  + {len(stats)} player-season rows for {YEARS}")
-
-
-# ─── Load all draft CSVs ─────────────────────────────────────────────────────
-print("\n  Loading local draft CSVs ...")
-adp_frames = [load_draft_csv(yr) for yr in YEARS]
-adp_frames = [f for f in adp_frames if not f.empty]
-
-if not adp_frames:
-    print("\n  ERROR: No draft CSV files found in data/")
-    sys.exit(1)
-
-adp_all = pd.concat(adp_frames, ignore_index=True)
-print(f"\n  Total ADP rows: {len(adp_all)}")
-
-
-# ─── Merge ADP with seasonal results ─────────────────────────────────────────
-print("\n  Merging ADP with seasonal results ...")
-stats_slim = stats[[
-    "player_id", "player_name", "position", "team", "season",
-    "fantasy_points_ppr", "actual_rank", "name_key",
-]].copy()
-
-merged = adp_all.merge(
-    stats_slim,
-    on=["name_key", "season"],
-    how="inner",
-    suffixes=("_adp", "_stats"),
-)
-
-merged["position"] = merged["position_stats"].fillna(merged["position_adp"])
-merged.drop(columns=["position_adp", "position_stats"], inplace=True)
-print(f"  + Matched {len(merged)} player-season rows")
-
-
-# ─── Value score & outcome classification ─────────────────────────────────────
-merged["value_score"] = merged["adp_rank"] - merged["actual_rank"]
-
-def classify(v: int) -> str:
-    if v >= STEAL_MIN:  return "Steal"
-    if v >= 0:          return "Hit"
-    if v > BUST_MAX:    return "Reach"
-    return "Bust"
-
-merged["outcome"]       = merged["value_score"].apply(classify)
-merged["round_drafted"] = np.ceil(merged["adp"] / 12).astype(int)
-
-
-# ─── VORP — points above positional replacement ───────────────────────────────
-print("\n  Computing VORP ...")
-
-# Positional rank within each (season, position)
-merged["pos_rank"] = (
-    merged.groupby(["season", "position"])["fantasy_points_ppr"]
-    .rank(ascending=False, method="min")
-    .astype(int)
-)
-
-# Replacement-level fpts: avg of REP_WINDOW players at the threshold
-rep_lookup: dict = {}
-for (yr, pos), grp in merged.groupby(["season", "position"]):
-    rep_rank = REPLACEMENT_RANK.get(pos)
-    if rep_rank is None:
+        print(f"  ⚠️  Missing: {path}")
         continue
-    rep_pool = grp[grp["pos_rank"].between(rep_rank, rep_rank + REP_WINDOW - 1)]
-    rep_lookup[(yr, pos)] = (
-        rep_pool["fantasy_points_ppr"].mean() if not rep_pool.empty
-        else grp["fantasy_points_ppr"].quantile(0.15)
+    df = pd.read_csv(path)
+    # 2025 has different column names
+    if season <= 2024:
+        df = df.rename(columns={"Name": "player_name", "Pos": "position", "Overall": "adp"})
+    else:
+        df = df.rename(columns={"Name": "player_name", "Position": "position", "Overall": "adp"})
+    df["season"] = season
+    df["adp"] = pd.to_numeric(df["adp"], errors="coerce")
+    df["adp_round"] = df["adp"].apply(lambda x: int(np.ceil(x / 12)) if pd.notna(x) else None)
+    adp_frames.append(df[["player_name", "position", "adp", "adp_round", "season"]])
+
+adp_all = pd.concat(adp_frames).dropna(subset=["adp"])
+adp_all = adp_all[adp_all["position"].isin(POSITIONS)]
+print(f"\n  ✓ ADP loaded: {len(adp_all)} rows across {adp_all['season'].nunique()} seasons")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD VARIANCE / ACTUALS
+# ─────────────────────────────────────────────────────────────────────────────
+variance = pd.read_csv(DATA / "player_variance.csv")
+print(f"  ✓ Variance loaded: {len(variance)} rows")
+
+
+def calc_fpts_pg(row):
+    """Half PPR points per game from median per-game stats."""
+    pos = str(row.get("position", ""))
+    pts  = row.get("passing_yards", 0) * 0.04 + row.get("passing_tds", 0) * 4
+    pts += row.get("rushing_yards", 0) * 0.1  + row.get("rushing_tds", 0) * 6
+    pts += row.get("receiving_yards", 0) * 0.1 + row.get("receiving_tds", 0) * 6
+    catch = {"WR": 0.72, "TE": 0.72, "RB": 0.82, "QB": 0}
+    pts += row.get("targets", 0) * catch.get(pos, 0.72) * 0.5
+    return round(pts, 2)
+
+
+def est_games(row):
+    pos = str(row.get("position", ""))
+    if pos == "QB":  return 15 if row.get("attempts", 0) > 25 else 10
+    if pos in ("WR", "TE"): return 15 if row.get("targets", 0) > 5 else 10
+    if pos == "RB":  return 15 if row.get("carries", 0) > 8 else 10
+    return 12
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CALCULATE VORP PER SEASON
+# ─────────────────────────────────────────────────────────────────────────────
+all_results = []
+
+for season in SEASONS:
+    s = variance[variance["season"] == season].copy()
+    if s.empty:
+        print(f"  ⚠️  No variance data for {season}")
+        continue
+
+    wide = s.pivot_table(
+        index=["player_id", "player_name", "position"],
+        columns="metric", values="median"
+    ).reset_index()
+    wide.columns.name = None
+    wide = wide.fillna(0)
+
+    wide["fpts_pg"]     = wide.apply(calc_fpts_pg, axis=1)
+    wide["est_games"]   = wide.apply(est_games, axis=1)
+    wide["fpts_season"] = (wide["fpts_pg"] * wide["est_games"]).round(1)
+
+    # Replacement levels
+    rep_levels = {}
+    for pos, threshold in REPLACEMENT.items():
+        pos_df = wide[wide["position"] == pos].sort_values("fpts_pg", ascending=False)
+        rep_levels[pos] = round(pos_df.iloc[threshold - 1]["fpts_pg"], 2) if len(pos_df) >= threshold else 0
+
+    wide["vorp_pg"]      = wide.apply(lambda r: round(r["fpts_pg"] - rep_levels.get(str(r["position"]), 0), 2), axis=1)
+    wide["vorp_season"]  = (wide["vorp_pg"] * wide["est_games"]).round(1)
+    wide["season"]       = season
+
+    for pos, val in rep_levels.items():
+        wide.loc[wide["position"] == pos, "replacement_pg"] = val
+
+    all_results.append(
+        wide[["player_name", "position", "season", "fpts_pg", "fpts_season",
+              "vorp_pg", "vorp_season", "replacement_pg", "est_games"]]
     )
 
-merged["rep_fpts"] = merged.apply(
-    lambda r: rep_lookup.get((r["season"], r["position"]), np.nan), axis=1
+all_players = pd.concat(all_results)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MERGE ADP + ACTUALS
+# ─────────────────────────────────────────────────────────────────────────────
+merged = all_players.merge(
+    adp_all[["player_name", "season", "adp", "adp_round"]],
+    on=["player_name", "season"], how="inner"
 )
-merged["vorp"] = (merged["fantasy_points_ppr"] - merged["rep_fpts"]).round(1)
-merged.drop(columns=["rep_fpts", "pos_rank"], inplace=True)
+merged = merged[merged["position"].isin(POSITIONS)]
 
+# Outcome labels for the dashboard
+def label_outcome(vorp):
+    if vorp >= 5:   return "Elite"
+    if vorp >= 3:   return "Hit"
+    if vorp >= 1:   return "Contributor"
+    if vorp >= 0:   return "Neutral"
+    if vorp >= -2:  return "Bust"
+    return "Disaster"
 
-# ─── Final column order & save ────────────────────────────────────────────────
-final = merged[[
-    "player_id", "player_name", "position", "team", "season",
-    "adp", "adp_stdev", "adp_rank", "round_drafted",
-    "fantasy_points_ppr", "actual_rank", "value_score", "vorp", "outcome",
-]].sort_values(["season", "adp_rank"]).reset_index(drop=True)
+merged["outcome"] = merged["vorp_pg"].apply(label_outcome)
 
-out_path = DATA / "draft_analysis.csv"
-final.to_csv(out_path, index=False)
-print(f"\n  Saved {len(final)} rows to {out_path}")
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
+merged.to_csv(DATA / "draft_vorp_full.csv", index=False)
+print(f"\n  ✓ draft_vorp_full.csv — {len(merged)} rows")
 
-
-# ─── Position × Round summary ─────────────────────────────────────────────────
-pos_round = final.groupby(["position", "round_drafted"]).agg(
-    avg_value_score = ("value_score",        "mean"),
-    avg_vorp        = ("vorp",               "mean"),
-    sample_size     = ("value_score",        "count"),
-    _steal          = ("outcome", lambda s: (s == "Steal").sum()),
-    _hit            = ("outcome", lambda s: (s == "Hit").sum()),
-    _reach          = ("outcome", lambda s: (s == "Reach").sum()),
-    _bust           = ("outcome", lambda s: (s == "Bust").sum()),
-).reset_index()
-
-pos_round["avg_value_score"] = pos_round["avg_value_score"].round(1)
-pos_round["avg_vorp"]        = pos_round["avg_vorp"].round(1)
-pos_round["steal_pct"] = (pos_round["_steal"] / pos_round["sample_size"] * 100).round(1)
-pos_round["hit_pct"]   = (pos_round["_hit"]   / pos_round["sample_size"] * 100).round(1)
-pos_round["reach_pct"] = (pos_round["_reach"] / pos_round["sample_size"] * 100).round(1)
-pos_round["bust_pct"]  = (pos_round["_bust"]  / pos_round["sample_size"] * 100).round(1)
-pos_round.drop(columns=["_steal", "_hit", "_reach", "_bust"], inplace=True)
-
-summary_cols = [
-    "position", "round_drafted", "avg_value_score", "avg_vorp",
-    "hit_pct", "bust_pct", "steal_pct", "reach_pct", "sample_size",
-]
-pos_round = pos_round[summary_cols].sort_values(["position", "round_drafted"])
-
-summary_path = DATA / "draft_analysis_summary.csv"
-pos_round.to_csv(summary_path, index=False)
-print(f"\n  Saved position/round summary to {summary_path}")
-
-
-# ─── Print summaries ──────────────────────────────────────────────────────────
-POSITIONS_ORDER = ["QB", "RB", "WR", "TE"]
-print("\n  Position x Round breakdown (avg VORP | avg value score | sample):")
-print(f"  {'Pos':<4} {'Rd':<4} {'AvgVORP':>8} {'AvgVal':>7} {'Hit%':>6} {'Steal%':>7} {'Bust%':>6} {'n':>5}")
-print("  " + "-" * 57)
-for _, row in pos_round[pos_round["position"].isin(POSITIONS_ORDER)].iterrows():
-    print(
-        f"  {row['position']:<4} {int(row['round_drafted']):<4}"
-        f" {row['avg_vorp']:>8.1f}"
-        f" {row['avg_value_score']:>7.1f}"
-        f" {row['hit_pct']:>6.1f}"
-        f" {row['steal_pct']:>7.1f}"
-        f" {row['bust_pct']:>6.1f}"
-        f" {int(row['sample_size']):>5}"
+# Summary: aggregated by season x position x round
+summary = (
+    merged.groupby(["season", "position", "adp_round"])
+    .agg(
+        avg_vorp_pg    = ("vorp_pg",  "mean"),
+        median_vorp_pg = ("vorp_pg",  "median"),
+        avg_fpts_pg    = ("fpts_pg",  "mean"),
+        hit_rate       = ("vorp_pg",  lambda x: (x > 1.0).mean() * 100),
+        bust_rate      = ("vorp_pg",  lambda x: (x < 0).mean() * 100),
+        elite_rate     = ("vorp_pg",  lambda x: (x > 3.0).mean() * 100),
+        n              = ("vorp_pg",  "count"),
     )
-
-print("\n  Outcome breakdown by year:")
-summary_yr = (
-    final.groupby(["season", "outcome"])
-    .size()
-    .unstack(fill_value=0)
+    .reset_index()
 )
-for col in ["Steal", "Hit", "Reach", "Bust"]:
-    if col not in summary_yr.columns:
-        summary_yr[col] = 0
-print(summary_yr[["Steal", "Hit", "Reach", "Bust"]].to_string())
+summary = summary[summary["n"] >= 2]
+summary["avg_vorp_pg"]    = summary["avg_vorp_pg"].round(2)
+summary["median_vorp_pg"] = summary["median_vorp_pg"].round(2)
+summary["avg_fpts_pg"]    = summary["avg_fpts_pg"].round(2)
+summary["hit_rate"]       = summary["hit_rate"].round(1)
+summary["bust_rate"]      = summary["bust_rate"].round(1)
+summary["elite_rate"]     = summary["elite_rate"].round(1)
 
-print("\n  Top 10 Steals (all years):")
-print(
-    final[final["outcome"] == "Steal"]
-    .sort_values("value_score", ascending=False)
-    .head(10)[["season", "player_name", "position", "adp_rank", "actual_rank", "value_score", "vorp"]]
-    .to_string(index=False)
-)
+summary.to_csv(DATA / "draft_vorp_summary.csv", index=False)
+print(f"  ✓ draft_vorp_summary.csv — {len(summary)} rows")
 
-print("\n  Top 10 Busts (all years):")
-print(
-    final[final["outcome"] == "Bust"]
-    .sort_values("value_score")
-    .head(10)[["season", "player_name", "position", "adp_rank", "actual_rank", "value_score", "vorp"]]
-    .to_string(index=False)
-)
-
+# ─────────────────────────────────────────────────────────────────────────────
+# QUICK SANITY CHECK
+# ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
-print("  Draft analysis complete!")
+print("  SANITY CHECK — 2025 Top VORP/gm per position")
 print("=" * 60)
+for pos in POSITIONS:
+    top = merged[(merged["season"] == 2025) & (merged["position"] == pos)].nlargest(3, "vorp_pg")
+    print(f"\n  {pos}:")
+    for _, r in top.iterrows():
+        print(f"    {r['player_name']:<25} ADP={r['adp']:.1f} R{r['adp_round']}  VORP={r['vorp_pg']:+.2f}")
+
+print("\n  ✅ Done — run app.py to see the updated Draft Intelligence page")

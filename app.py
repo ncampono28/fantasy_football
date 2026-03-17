@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
+from pages.draft_intelligence import render_draft_page
 
 st.set_page_config(
     page_title="FF Projection Model",
@@ -863,7 +864,7 @@ def main():
         _projection_tab(selected, proj_df, seasonal, team_stats, scoring, tiers_df)
 
     with tab_draft:
-        _draft_tab(draft_summary, draft_detail)
+        render_draft_page()
 
 
 main()
