@@ -259,7 +259,7 @@ def _adp_tab(adp_cur, adp_hist, adp_trends, tiers_df):
     st.subheader(f"Current Rankings — {len(df)} players shown")
     st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
     st.caption(
-        f"Best Ball ADP = Underdog March 4 draft position (lower is better)  ·  "
+        f"Best Ball ADP = Underdog Best Ball draft position (lower is better)  ·  "
         f"Value Score = positional ADP rank − model positional rank (positive = undervalued at position)  ·  "
         f"Tier metrics = 12-team PPR, most recent season  ·  "
         f"Snapshot: {snapshot_date}"
